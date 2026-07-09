@@ -178,7 +178,7 @@ def init_db():
                           (p[0], p[1], final_price, p[3], p[7], p[4], 4.8, p[5], p[6]))
     
     db.commit()
-    db.close()
+    db.conn.close()
 
 
 # ---------- auth helpers ----------
