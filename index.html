@@ -699,7 +699,10 @@ function updateCartUI(){
   } else {
     body.innerHTML = cart.map(c=>{
       const p = products.find(pr=>pr.id===c.id);
-      if(!p) return '';
+      if(!p) {
+        setTimeout(() => { cart = cart.filter(x=>x.id!==c.id); saveCart(); updateCartUI(); }, 0);
+        return '';
+      }
       const originalPrice = Math.round((p.price - 49) / 1.20);
       return `
       <div class="cart-item">
@@ -734,6 +737,11 @@ function openCheckout(){
 }
 function closeCheckout(){ document.getElementById('checkoutModal').classList.remove('open'); }
 document.getElementById('checkoutBtn').addEventListener('click', () => { if(cart.length===0){ showToast("Cart empty"); return; } openCheckout(); });
+
+// Cart Listeners
+document.getElementById('cartBtn').addEventListener('click', openCart);
+document.getElementById('closeCart').addEventListener('click', closeCartFn);
+document.getElementById('overlay').addEventListener('click', closeCartFn);
 
 async function processCheckout(){
   const addr = document.getElementById('addressInput').value;
