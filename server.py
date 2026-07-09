@@ -85,18 +85,41 @@ def init_db():
         """CREATE TABLE IF NOT EXISTS products (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             name TEXT, category TEXT, price REAL, stock INTEGER,
+            image TEXT, rating REAL,
             source TEXT, source_url TEXT, description TEXT,
             seller_id INTEGER
         )"""
     )
     db.execute(
         """CREATE TABLE IF NOT EXISTS orders (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            product_id INTEGER, buyer_id INTEGER, quantity INTEGER,
+            id TEXT PRIMARY KEY,
+            items TEXT NOT NULL,
+            total REAL NOT NULL,
+            userEmail TEXT NOT NULL,
+            address TEXT NOT NULL,
             status TEXT DEFAULT 'placed', payment_verified INTEGER DEFAULT 0,
-            created_at REAL
+            stage INTEGER DEFAULT 0
         )"""
     )
+    
+    # Seed products if empty (important for Render ephemeral disk)
+    cursor = db.cursor()
+    cursor.execute("SELECT COUNT(*) FROM products")
+    if cursor.fetchone()[0] == 0:
+        initial_data = [
+            ("Arduino Uno R3 (CH340G, Micro USB)", "Microcontrollers", 239.0, 50, "Robocraze", "https://robocraze.com/products/uno-r3-board-compatible-with-arduino", "ATmega328P-based microcontroller board."),
+            ("Raspberry Pi 4 Model B (4GB RAM)", "Microcontrollers", 5546.0, 15, "Robocraze", "https://robocraze.com/products/raspberry-pi-4-model-b-4gb-ram", "Broadcom BCM2711 Quad-core Cortex-A72 SBC."),
+            ("HC-SR04 Ultrasonic Sensor", "Sensors", 59.0, 100, "Robocraze", "https://robocraze.com/products/hc-sr-04-ultrasonic-sensor", "Non-contact ultrasonic distance sensor."),
+            ("L298N Motor Driver", "Modules", 136.0, 150, "Robocraze", "https://robocraze.com/products/l298-motor-driver-module", "Dual H-bridge motor driver module."),
+            ("SG90 9G Micro Servo", "Robotics", 89.0, 90, "Robocraze", "https://robocraze.com/collections/servo-motors-controllers", "TowerPro SG90 micro servo.")
+        ]
+        import urllib.parse
+        for p in initial_data:
+            img = f"https://image.pollinations.ai/prompt/{urllib.parse.quote_plus(p[0])}%20electronic%20component%20realistic%20white%20background"
+            cursor.execute('''INSERT INTO products (name, category, price, stock, image, source, rating, source_url, description)
+                             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)''',
+                          (p[0], p[1], p[2], p[3], img, p[4], 4.8, p[5], p[6]))
+    
     db.commit()
     db.close()
 
@@ -107,6 +130,7 @@ def make_session(user_row):
     token = secrets.token_urlsafe(32)
     SESSIONS[token] = {
         "user_id": user_row["id"],
+        "email": user_row["email"],
         "role": user_row["role"],
         "expires": time.time() + SESSION_TTL_SECONDS,
     }
@@ -157,8 +181,6 @@ def signup():
         return jsonify({"error": "An account with this email already exists"}), 409
 
     pass_hash = bcrypt.hashpw(password.encode("utf-8"), bcrypt.gensalt()).decode("utf-8")
-    # NOTE: every new signup is a 'buyer'. There is no client-supplied role field,
-    # and no verification code that grants elevated access. This is intentional.
     cur = db.execute(
         "INSERT INTO users (email, name, pass_hash, role) VALUES (?,?,?, 'buyer')",
         (email, name, pass_hash),
@@ -179,9 +201,6 @@ def login():
     db = get_db()
     user_row = db.execute("SELECT * FROM users WHERE email=?", (email,)).fetchone()
 
-    # Always run bcrypt.checkpw even on a "user not found" path in a real
-    # hardened version (to avoid timing attacks revealing valid emails).
-    # Keeping it simple here, but worth doing later.
     if not user_row or not bcrypt.checkpw(password.encode("utf-8"), user_row["pass_hash"].encode("utf-8")):
         return jsonify({"error": "Invalid email or password"}), 401
 
@@ -264,12 +283,35 @@ def delete_product(product_id):
     product = db.execute("SELECT * FROM products WHERE id=?", (product_id,)).fetchone()
     if not product:
         return jsonify({"error": "Not found"}), 404
-    # Sellers can only delete their own listings; admins can delete anything.
     if session["role"] == "seller" and product["seller_id"] != session["user_id"]:
         return jsonify({"error": "Not authorized"}), 403
     db.execute("DELETE FROM products WHERE id=?", (product_id,))
     db.commit()
     return jsonify({"ok": True})
+
+
+# ---------- AI Features ----------
+
+@app.route('/api/grok', methods=['POST'])
+def grok_ai():
+    data = request.json or {}
+    try:
+        import urllib.parse
+        import urllib.request
+        prompt_encoded = urllib.parse.quote(data.get('prompt', ''))
+        req = urllib.request.Request(
+            "https://text.pollinations.ai/prompt/" + prompt_encoded + "?json=true&model=openai",
+            headers={'User-Agent': 'Mozilla/5.0'}
+        )
+        with urllib.request.urlopen(req) as response:
+            res_body = response.read().decode('utf-8')
+        return jsonify({"result": res_body})
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+@app.route('/api/voltix-ai', methods=['POST'])
+def voltix_ai():
+    return grok_ai()
 
 
 # ---------- orders ----------
@@ -288,14 +330,9 @@ def create_order():
     if not product or product["stock"] < quantity:
         return jsonify({"error": "Product unavailable or insufficient stock"}), 400
 
-    # IMPORTANT: payment_verified starts at 0. Stock is NOT decremented here.
-    # Stock should only decrement, and the order only move to 'confirmed',
-    # once your payment gateway's webhook confirms the payment server-side.
-    # Plug your gateway's verification call in where the TODO is below.
     cur = db.execute(
-        "INSERT INTO orders (product_id, buyer_id, quantity, status, payment_verified, created_at) "
-        "VALUES (?,?,?, 'pending_payment', 0, ?)",
-        (product_id, session["user_id"], quantity, time.time()),
+        "INSERT INTO orders (id, items, total, userEmail, address, status, payment_verified, stage) VALUES (?,?,?,?,?,?,?,?)",
+        (secrets.token_hex(8), json.dumps([{"id": product_id, "q": quantity}]), product["price"]*quantity, session["email"], "N/A", 'pending_payment', 0, 0),
     )
     db.commit()
     return jsonify({"order_id": cur.lastrowid, "status": "pending_payment"})
@@ -303,13 +340,6 @@ def create_order():
 
 @app.route("/api/orders/<int:order_id>/verify_payment", methods=["POST"])
 def verify_payment(order_id):
-    """
-    TODO: Replace this with your real payment gateway's server-side
-    verification (e.g. Razorpay webhook signature check, or a call to
-    the gateway's "verify payment" API using the payment_id the gateway
-    gives you). Do NOT mark payment_verified=1 just because the client
-    says so — that is the exact bug that was in the original code.
-    """
     session, err = require_role("buyer", "admin")
     if err:
         return err
@@ -318,15 +348,11 @@ def verify_payment(order_id):
     if not order:
         return jsonify({"error": "Not found"}), 404
 
-    # -------- placeholder: wire real gateway verification here --------
-    payment_confirmed_by_gateway = False  # never leave this hardcoded True
-    # --------------------------------------------------------------------
+    payment_confirmed_by_gateway = False 
 
     if not payment_confirmed_by_gateway:
         return jsonify({"error": "Payment not verified by gateway yet"}), 402
 
-    product = db.execute("SELECT * FROM products WHERE id=?", (order["product_id"],)).fetchone()
-    db.execute("UPDATE products SET stock = stock - ? WHERE id=?", (order["quantity"], product["id"]))
     db.execute("UPDATE orders SET status='confirmed', payment_verified=1 WHERE id=?", (order_id,))
     db.commit()
     return jsonify({"ok": True})
@@ -347,14 +373,20 @@ def advance_order(order_id):
     return jsonify({"ok": True})
 
 
-@app.route("/api/orders/mine", methods=["GET"])
+@app.route("/api/orders/my", methods=["GET"])
 def my_orders():
     session, err = require_role("buyer", "seller", "admin", "delivery")
     if err:
         return err
     db = get_db()
-    rows = db.execute("SELECT * FROM orders WHERE buyer_id=?", (session["user_id"],)).fetchall()
-    return jsonify([dict(r) for r in rows])
+    cur = db.execute("SELECT * FROM orders WHERE userEmail = ?", (session["email"],))
+    rows = cur.fetchall()
+    orders = []
+    for r in rows:
+        d = dict(r)
+        d["items"] = json.loads(d["items"])
+        orders.append(d)
+    return jsonify(orders)
 
 
 if __name__ == "__main__":
