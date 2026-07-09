@@ -581,7 +581,7 @@
 
 <div class="toast" id="toast"></div>
 
-<script src="auth.js"></script>
+<script src="auth.js?v=2"></script>
 <script>
 let products = [];
 let currentUser = null;
@@ -863,7 +863,7 @@ window.cancelOrder = async (orderId) => {
 };
 
 function renderMyOrders(){
-    apiGet('/api/my_orders').then(orders => {
+    apiGet('/api/orders/my').then(orders => {
       const div = document.getElementById('myOrdersContent');
       if(orders.length===0){ div.innerHTML = '<div class="empty-note">No orders yet. Start building!</div>'; return; }
       div.innerHTML = orders.map(o=>`
