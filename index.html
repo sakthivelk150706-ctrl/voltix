@@ -686,6 +686,7 @@ document.getElementById('closePdBtn').addEventListener('click', closePd);
 function renderProducts(){
   const grid = document.getElementById('productGrid');
   const filtered = products.filter(p=>{
+    if (p.category === "AI Sourced") return false; // Hide dynamically searched items from catalog
     const matchCat = activeCategory==="All" || p.category===activeCategory;
     const matchSearch = p.name.toLowerCase().includes(searchTerm.toLowerCase());
     return matchCat && matchSearch;
