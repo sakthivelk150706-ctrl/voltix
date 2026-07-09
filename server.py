@@ -106,6 +106,7 @@ def init_db():
                     address TEXT,
                     customer_phone TEXT,
                     delivery_charge REAL,
+                    delivery_days TEXT,
                     status TEXT,
                     payment_verified INTEGER,
                     stage INTEGER
@@ -117,6 +118,9 @@ def init_db():
     except: pass
     try:
         db.execute('ALTER TABLE orders ADD COLUMN delivery_charge REAL')
+    except: pass
+    try:
+        db.execute('ALTER TABLE orders ADD COLUMN delivery_days TEXT')
     except: pass
     
     # Purge any old AI-generated or Robu images from the database
@@ -279,6 +283,7 @@ def admin_set_delivery():
     data = request.json or {}
     order_id = data.get("orderId")
     delivery_charge = data.get("deliveryCharge")
+    delivery_days = data.get("deliveryDays", "3-5 days")
     
     if not order_id or delivery_charge is None:
         return jsonify({"error": "Missing orderId or deliveryCharge"}), 400
@@ -286,7 +291,7 @@ def admin_set_delivery():
     db = get_db()
     try:
         delivery_charge = float(delivery_charge)
-        db.execute("UPDATE orders SET delivery_charge = ?, status = 'confirmed', stage = 1 WHERE id = ?", (delivery_charge, order_id))
+        db.execute("UPDATE orders SET delivery_charge = ?, delivery_days = ?, status = 'confirmed', stage = 1 WHERE id = ?", (delivery_charge, delivery_days, order_id))
         db.commit()
         return jsonify({"success": True})
     except ValueError:
@@ -407,35 +412,6 @@ def voltix_ai():
     return grok_ai()
 
 
-# ---------- orders ----------
-
-@app.route('/api/calculate_delivery', methods=['POST'])
-def calculate_delivery():
-    data = request.json or {}
-    pincode = data.get("pincode", "").strip()
-    
-    if not pincode or len(pincode) != 6 or not pincode.isdigit():
-        return jsonify({"error": "Invalid PIN Code"}), 400
-        
-    # Simple deterministic mock algorithm based on Indian PIN codes
-    # For a real app, integrate Shiprocket API here.
-    first_digit = pincode[0]
-    
-    if first_digit in ['6']: # South India (Assuming warehouse is here)
-        charge = 40.0
-        days = "1-2 days"
-    elif first_digit in ['7', '8', '9']: # East/North East India (Far)
-        charge = 120.0
-        days = "5-7 days"
-    elif first_digit in ['1']: # North India
-        charge = 90.0
-        days = "4-5 days"
-    else: # Central/West India
-        charge = 65.0
-        days = "3-4 days"
-        
-    return jsonify({"success": True, "charge": charge, "days": days})
-
 @app.route('/api/orders', methods=['POST'])
 def create_order():
     session = check_session()
@@ -450,13 +426,6 @@ def create_order():
     
     if not items or not address or not phone or not pincode:
         return jsonify({"error": "Missing items, address, phone, or pincode"}), 400
-        
-    # Calculate delivery automatically based on pincode
-    first_digit = pincode[0]
-    if first_digit in ['6']: charge = 40.0
-    elif first_digit in ['7', '8', '9']: charge = 120.0
-    elif first_digit in ['1']: charge = 90.0
-    else: charge = 65.0
         
     db = get_db()
     cursor = db.cursor()
@@ -481,12 +450,12 @@ def create_order():
         
     order_id = "ORD-" + secrets.token_hex(4).upper()
     db.execute(
-        "INSERT INTO orders (id, items, total, userEmail, address, customer_phone, delivery_charge, status, payment_verified, stage) VALUES (?,?,?,?,?,?,?,?,?,?)",
-        (order_id, json.dumps(items), total, session["email"], f"{address} - {pincode}", phone, charge, 'confirmed', 0, 1)
+        "INSERT INTO orders (id, items, total, userEmail, address, customer_phone, status, payment_verified, stage) VALUES (?,?,?,?,?,?,?,?,?)",
+        (order_id, json.dumps(items), total, session["email"], f"{address} - PIN: {pincode}", phone, 'pending_confirmation', 0, 0)
     )
     db.commit()
     
-    return jsonify({"success": True, "orderId": order_id, "delivery_charge": charge})
+    return jsonify({"success": True, "orderId": order_id})
 
 
 @app.route("/api/orders/<int:order_id>/verify_payment", methods=["POST"])
@@ -532,13 +501,31 @@ def my_orders():
     
     db = get_db()
     cursor = db.cursor()
-    cursor.execute("SELECT id, items, total, userEmail, address, customer_phone, delivery_charge, status, payment_verified, stage FROM orders WHERE userEmail = ?", (session["email"],))
+    cursor.execute("SELECT id, items, total, userEmail, address, customer_phone, delivery_charge, delivery_days, status, payment_verified, stage FROM orders WHERE userEmail = ?", (session["email"],))
     orders = []
     for r in cursor.fetchall():
         orders.append({
             "id": r[0], "items": json.loads(r[1]), "total": r[2],
-            "userEmail": r[3], "address": r[4], "phone": r[5], "delivery_charge": r[6], "status": r[7],
-            "payment_verified": bool(r[8]), "stage": r[9]
+            "userEmail": r[3], "address": r[4], "phone": r[5], "delivery_charge": r[6], "delivery_days": r[7], "status": r[8],
+            "payment_verified": bool(r[9]), "stage": r[10]
+        })
+    return jsonify(orders)
+
+@app.route("/api/admin/orders", methods=["GET"])
+def admin_orders():
+    session, err = require_role("admin")
+    if err:
+        return jsonify({"error": "Admin access required"}), 403
+    
+    db = get_db()
+    cursor = db.cursor()
+    cursor.execute("SELECT id, items, total, userEmail, address, customer_phone, delivery_charge, delivery_days, status, payment_verified, stage FROM orders")
+    orders = []
+    for r in cursor.fetchall():
+        orders.append({
+            "id": r[0], "items": json.loads(r[1]), "total": r[2],
+            "userEmail": r[3], "address": r[4], "phone": r[5], "delivery_charge": r[6], "delivery_days": r[7], "status": r[8],
+            "payment_verified": bool(r[9]), "stage": r[10]
         })
     return jsonify(orders)
 

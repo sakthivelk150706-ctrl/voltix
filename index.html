@@ -422,18 +422,18 @@
   <div class="modal">
     <h3>Pay on Delivery</h3>
     <p style="font-size:0.9rem; color:var(--text); margin-bottom: 5px;">Item Total: <span id="checkoutTotalAmt" style="font-weight:700;color:var(--volt);"></span></p>
-    <div id="deliveryQuoteBox" style="font-size:0.85rem; color:#aaa; margin-bottom: 15px; padding:10px; background:var(--surface-2); border-left:3px solid var(--volt);">
-      Enter your PIN Code to calculate delivery charges and estimated delivery days instantly.
+    <div style="font-size:0.8rem; color:#aaa; margin-bottom: 20px; padding:10px; background:var(--surface-2); border-left:3px solid var(--volt);">
+      <strong>Notice:</strong> Delivery charges vary based on supplier and location. The seller will verify your PIN code and confirm the exact delivery charge within 6 hours. Pay the final total in cash upon delivery.
     </div>
     <div>
       <input type="text" id="phoneInput" placeholder="Contact Phone Number" style="margin-bottom:10px;">
       <div style="display:flex; gap:10px; margin-bottom:10px;">
-        <input type="text" id="pincodeInput" placeholder="6-Digit PIN Code" style="flex:1;" maxlength="6" oninput="if(this.value.length===6) calculateDelivery()">
+        <input type="text" id="pincodeInput" placeholder="6-Digit PIN Code" style="flex:1;" maxlength="6">
       </div>
       <textarea id="addressInput" placeholder="Complete Shipping Address (House, Street, Area)" rows="3"></textarea>
     </div>
     <div style="display:flex;gap:10px;margin-top:20px;">
-      <button onclick="processCheckout()" class="btn-primary" style="flex:1;">Place Order</button>
+      <button onclick="processCheckout()" class="btn-primary" style="flex:1;">Request Order Confirmation</button>
       <button onclick="closeCheckout()" class="btn-outline" style="flex:1;">Cancel</button>
     </div>
   </div>
@@ -728,47 +728,22 @@ function closeCartFn(){ document.getElementById('cartDrawer').classList.remove('
 function openCheckout(){
   const total = cart.reduce((s,c)=>{ const p=products.find(pr=>pr.id===c.id); return s + p.price*c.qty; },0);
   document.getElementById('checkoutTotalAmt').textContent = "₹" + total.toLocaleString('en-IN');
-  document.getElementById('deliveryQuoteBox').innerHTML = 'Enter your PIN Code to calculate delivery charges and estimated delivery days instantly.';
   document.getElementById('pincodeInput').value = '';
   document.getElementById('checkoutModal').classList.add('open');
 }
 function closeCheckout(){ document.getElementById('checkoutModal').classList.remove('open'); }
 document.getElementById('checkoutBtn').addEventListener('click', () => { if(cart.length===0){ showToast("Cart empty"); return; } openCheckout(); });
 
-let currentDeliveryCharge = null;
-
-async function calculateDelivery() {
-  const pin = document.getElementById('pincodeInput').value;
-  const quoteBox = document.getElementById('deliveryQuoteBox');
-  if(pin.length !== 6) return;
-  quoteBox.innerHTML = '<span style="color:var(--volt);">Calculating...</span>';
-  try {
-    const res = await apiPost('/api/calculate_delivery', {pincode: pin});
-    if(res.success) {
-      currentDeliveryCharge = res.charge;
-      const itemTotal = cart.reduce((s,c)=>{ const p=products.find(pr=>pr.id===c.id); return s + p.price*c.qty; },0);
-      quoteBox.innerHTML = `
-        <strong style="color:var(--volt);">Delivery: ₹${res.charge}</strong> (Estimated: ${res.days})<br>
-        <span style="font-size:0.95rem; font-weight:bold; color:#fff; display:block; margin-top:5px;">Final Total to Pay: ₹${(itemTotal + res.charge).toLocaleString('en-IN')}</span>
-      `;
-    } else {
-      quoteBox.innerHTML = `<span style="color:red;">${res.error || 'Invalid PIN'}</span>`;
-      currentDeliveryCharge = null;
-    }
-  } catch(e) { quoteBox.innerHTML = "Error calculating delivery"; }
-}
-
 async function processCheckout(){
   const addr = document.getElementById('addressInput').value;
   const phone = document.getElementById('phoneInput').value;
   const pin = document.getElementById('pincodeInput').value;
   if(!addr || !phone || !pin) return alert("Enter shipping address, PIN code, and phone number");
-  if(currentDeliveryCharge === null) return alert("Please enter a valid PIN code to calculate delivery first.");
   
   try {
     const res = await apiPost('/api/orders', {items:cart, address:addr, phone:phone, pincode:pin});
     if(res.success){
-      alert(`Order placed! You will pay ₹${res.delivery_charge} for delivery upon arrival.`);
+      alert("Order placed successfully! The seller will verify your PIN Code and confirm delivery charges within 6 hours.");
       cart=[];
       closeCheckout();
       closeCartFn();
@@ -859,11 +834,12 @@ async function renderAdminOrders(){
         </div>
         ${o.status === 'pending_confirmation' ? `
           <div style="display:flex; gap:10px; margin-top:10px;">
-            <input type="number" id="del_chg_${o.id}" placeholder="Delivery Charge (₹)" style="flex:1; padding:5px; background:#1e1e1e; border:1px solid #444; color:#fff;">
-            <button class="btn-primary" onclick="setDeliveryCharge('${o.id}')" style="padding:5px 15px;">Confirm Order</button>
+            <input type="number" id="del_chg_${o.id}" placeholder="Charge (₹)" style="flex:1; max-width:100px; padding:5px; background:#1e1e1e; border:1px solid #444; color:#fff;">
+            <input type="text" id="del_days_${o.id}" placeholder="Days (e.g. 3-5 days)" style="flex:2; padding:5px; background:#1e1e1e; border:1px solid #444; color:#fff;">
+            <button class="btn-primary" onclick="setDeliveryCharge('${o.id}')" style="padding:5px 15px;">Confirm</button>
           </div>
         ` : `
-          <div style="font-size:0.85rem;color:var(--volt);">Delivery Charge Confirmed: ₹${o.delivery_charge}</div>
+          <div style="font-size:0.85rem;color:var(--volt);">Delivery Confirmed: ₹${o.delivery_charge} (${o.delivery_days})</div>
         `}
       </div>`).join('');
     } catch(e) { div.innerHTML = 'Error'; }
@@ -871,8 +847,9 @@ async function renderAdminOrders(){
   
 window.setDeliveryCharge = async (orderId) => {
     const charge = document.getElementById('del_chg_'+orderId).value;
+    const days = document.getElementById('del_days_'+orderId).value || "3-5 days";
     if(!charge) return alert('Enter delivery charge');
-    const res = await apiPost('/api/admin/set_delivery', {orderId, deliveryCharge: parseFloat(charge)});
+    const res = await apiPost('/api/admin/set_delivery', {orderId, deliveryCharge: parseFloat(charge), deliveryDays: days});
     if(res.success) { alert('Confirmed!'); renderAdminOrders(); }
 };
 
@@ -886,8 +863,9 @@ function renderMyOrders(){
         <div style="font-size:0.85rem;color:var(--muted);margin-bottom:10px;">${o.items.length} items</div>
         <div style="display:flex;justify-content:space-between;align-items:center;">
           <div>
-            <span class="mono" style="color:var(--volt);">Final Total: ₹${(o.total + o.delivery_charge).toLocaleString('en-IN')}</span><br>
-            <span style="font-size:0.8rem;color:var(--text);">Includes ₹${o.delivery_charge} delivery</span>
+            ${o.status === 'pending_confirmation' 
+              ? `<span style="color:orange; font-weight:bold;">Awaiting Delivery Quote</span><br><span style="font-size:0.8rem;color:var(--muted);">Checking charges... (Within 6 hrs)</span>` 
+              : `<span class="mono" style="color:var(--volt);">Final Total: ₹${(o.total + o.delivery_charge).toLocaleString('en-IN')}</span><br><span style="font-size:0.8rem;color:var(--text);">Includes ₹${o.delivery_charge} delivery (${o.delivery_days})</span>`}
           </div>
           <span class="stock-badge ${o.status==='confirmed'?'stock-ok':'stock-low'}">${o.status==='confirmed'?'Pay on Delivery':'Pending'}</span>
         </div>
