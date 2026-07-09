@@ -302,17 +302,65 @@ def delete_product(product_id):
 @app.route('/api/grok', methods=['POST'])
 def grok_ai():
     data = request.json or {}
+    query = data.get('prompt', '')
+    # The frontend passes a long prompt, let's extract the actual search term
+    import re, urllib.request, urllib.parse
+    match = re.search(r'searched for: "(.*?)"', query)
+    search_term = match.group(1) if match else "arduino"
+    
+    url = 'https://www.electronicscomp.com/index.php?route=product/search&search=' + urllib.parse.quote_plus(search_term)
+    req = urllib.request.Request(url, headers={'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)'})
+    
     try:
-        import urllib.parse
-        import urllib.request
-        prompt_encoded = urllib.parse.quote(data.get('prompt', ''))
-        req = urllib.request.Request(
-            "https://text.pollinations.ai/prompt/" + prompt_encoded + "?json=true&model=openai",
-            headers={'User-Agent': 'Mozilla/5.0'}
-        )
-        with urllib.request.urlopen(req) as response:
-            res_body = response.read().decode('utf-8')
-        return jsonify({"result": res_body})
+        html = urllib.request.urlopen(req).read().decode('utf-8')
+        prod_block = re.search(r'<div class="product-layout.*?</div></div></div>', html, re.DOTALL)
+        if not prod_block:
+            return jsonify({"result": json.dumps({"found": False, "reason": "Not available."})})
+            
+        pb = prod_block.group(0)
+        img_match = re.search(r'<img src="(.*?)"', pb)
+        link_match = re.search(r'<div class="image"><a href="(.*?)"', pb)
+        title_match = re.search(r'<h4><a href=".*?">(.*?)</a></h4>', pb)
+        
+        # ElectronicsComp has two price formats depending on discount
+        price_match = re.search(r'<span class="price-new"><i class="fa fa-inr"></i> (.*?)</span>', pb)
+        if not price_match:
+            price_match = re.search(r'<p class="price">\s*<i class="fa fa-inr"></i> (.*?)\s*</p>', pb)
+            
+        if not title_match or not price_match:
+            return jsonify({"result": json.dumps({"found": False, "reason": "Parse error."})})
+            
+        title = title_match.group(1).strip()
+        base_price = float(price_match.group(1).replace(',', ''))
+        img_url = img_match.group(1) if img_match else "https://placehold.co/80x80"
+        source_url = link_match.group(1) if link_match else url
+        
+        # Markup: 5% packing + 49 delivery
+        final_price = round(base_price * 1.05 + 49, 2)
+        
+        # Insert into DB so cart works
+        db = get_db()
+        cur = db.execute('''INSERT INTO products (name, category, price, stock, image, source, rating, source_url, description)
+                            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)''',
+                         (title, "AI Sourced", final_price, 50, img_url, "ElectronicsComp", 4.9, source_url, "Dynamically sourced top-tier electronic component."))
+        new_id = cur.lastrowid
+        db.commit()
+        
+        response_data = {
+            "found": True,
+            "product_id": new_id,
+            "product_name": title,
+            "category": "AI Sourced",
+            "base_price": base_price,
+            "packing_charge": round(base_price * 0.05, 2),
+            "delivery_charge": 49,
+            "final_price": final_price,
+            "source_url": source_url,
+            "image": img_url,
+            "reason": "Scraped exact real-world price directly from ElectronicsComp.",
+            "description": "High-quality electronic component sourced directly from market."
+        }
+        return jsonify({"result": json.dumps(response_data)})
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 
@@ -329,20 +377,31 @@ def create_order():
     if err:
         return err
     data = request.get_json(force=True) or {}
-    product_id = data.get("product_id")
-    quantity = int(data.get("quantity", 1))
+    items = data.get("items", [])
+    if not items:
+        return jsonify({"error": "Empty cart"}), 400
 
     db = get_db()
-    product = db.execute("SELECT * FROM products WHERE id=?", (product_id,)).fetchone()
-    if not product or product["stock"] < quantity:
-        return jsonify({"error": "Product unavailable or insufficient stock"}), 400
+    # Check stock for all items
+    for item in items:
+        product = db.execute("SELECT stock FROM products WHERE id=?", (item["id"],)).fetchone()
+        if not product or product["stock"] < item["qty"]:
+            return jsonify({"error": f"Product {item['id']} unavailable or insufficient stock"}), 400
+
+    # Deduct stock
+    for item in items:
+        db.execute("UPDATE products SET stock = stock - ? WHERE id=?", (item["qty"], item["id"]))
+
+    total = float(data.get("total", 0.0))
+    address = data.get("address", "N/A")
+    order_id = "VLX-" + secrets.token_hex(4).upper()
 
     cur = db.execute(
         "INSERT INTO orders (id, items, total, userEmail, address, status, payment_verified, stage) VALUES (?,?,?,?,?,?,?,?)",
-        (secrets.token_hex(8), json.dumps([{"id": product_id, "q": quantity}]), product["price"]*quantity, session["email"], "N/A", 'pending_payment', 0, 0),
+        (order_id, json.dumps(items), total, session["email"], address, 'pending_payment', 0, 0),
     )
     db.commit()
-    return jsonify({"order_id": cur.lastrowid, "status": "pending_payment"})
+    return jsonify({"order_id": order_id, "status": "pending_payment"})
 
 
 @app.route("/api/orders/<int:order_id>/verify_payment", methods=["POST"])

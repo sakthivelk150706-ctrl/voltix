@@ -1173,20 +1173,24 @@ async function runAiSearch(){
       let cleaned = res.result.replace(/```json/g, '').replace(/```/g, '').trim();
       const data = JSON.parse(cleaned);
       if(data.found){
+        // The backend now performs LIVE web scraping of electronicscomp.com!
+        // It fetches exact real prices and exact product images, and automatically adds it to our database!
         let prodId = data.product_id;
         
-        // If it's a dynamically sourced new item, we do NOT save it to the database anymore!
-        // The user just wants the AI to provide external website links for less price.
-        let imgUrl = "https://placehold.co/80x80";
-        let foundProd = products.find(x => x.id == prodId);
-        
-        if (prodId === "NEW") {
-          imgUrl = "https://image.pollinations.ai/prompt/" + encodeURIComponent(data.product_name + " electronic component realistic top down photography white background");
-          foundProd = { image: imgUrl };
-        } else if (!foundProd) {
-          foundProd = { image: "https://placehold.co/80x80" };
+        // Refresh local catalog to ensure we have the newly added dynamically sourced item
+        const cat = await apiGet('/api/products');
+        if (!cat.error) {
+          products = cat.map(p => {
+            if (p.image && p.image.startsWith('/')) {
+              p.image = BASE_URL + p.image;
+            }
+            return p;
+          });
+          renderProducts();
         }
-        const displayImg = foundProd.image || "";
+
+        const foundProd = products.find(x => x.id == prodId) || { image: data.image || "https://placehold.co/80x80" };
+        const displayImg = data.image || foundProd.image || "";
 
         resultDiv.innerHTML = `
           <div style="padding:15px; background:rgba(42,212,255,0.05); border:1px solid rgba(42,212,255,0.2); border-radius:12px; display:flex; flex-direction:column; gap:10px;">
