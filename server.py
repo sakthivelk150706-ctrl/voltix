@@ -47,6 +47,13 @@ CORS(app, resources={r"/api/*": {"origins": ALLOWED_ORIGIN}}, supports_credentia
 
 limiter = Limiter(get_remote_address, app=app, default_limits=["200 per hour"])
 
+from flask import redirect
+
+@app.route("/")
+def index():
+    # Redirect visitors to the frontend instead of showing a 404 error
+    return redirect("https://sakthivelk150706-ctrl.github.io/voltix/")
+
 DB_PATH = os.environ.get("DB_PATH", "voltix.db")
 
 # In-memory session store: {token: {"user_id":..., "role":..., "expires":...}}
