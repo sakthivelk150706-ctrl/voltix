@@ -109,23 +109,24 @@ def init_db():
         )"""
     )
     
+    # Purge any old AI-generated images from the database
+    db.execute('DELETE FROM products WHERE image LIKE "%pollinations%"')
+    
     # Seed products if empty (important for Render ephemeral disk)
     cursor = db.cursor()
     cursor.execute("SELECT COUNT(*) FROM products")
     if cursor.fetchone()[0] == 0:
         initial_data = [
-            ("Arduino Uno R3 (CH340G, Micro USB)", "Microcontrollers", 239.0, 50, "Robocraze", "https://robocraze.com/products/uno-r3-board-compatible-with-arduino", "ATmega328P-based microcontroller board."),
-            ("Raspberry Pi 4 Model B (4GB RAM)", "Microcontrollers", 5546.0, 15, "Robocraze", "https://robocraze.com/products/raspberry-pi-4-model-b-4gb-ram", "Broadcom BCM2711 Quad-core Cortex-A72 SBC."),
-            ("HC-SR04 Ultrasonic Sensor", "Sensors", 59.0, 100, "Robocraze", "https://robocraze.com/products/hc-sr-04-ultrasonic-sensor", "Non-contact ultrasonic distance sensor."),
-            ("L298N Motor Driver", "Modules", 136.0, 150, "Robocraze", "https://robocraze.com/products/l298-motor-driver-module", "Dual H-bridge motor driver module."),
-            ("SG90 9G Micro Servo", "Robotics", 89.0, 90, "Robocraze", "https://robocraze.com/collections/servo-motors-controllers", "TowerPro SG90 micro servo.")
+            ("Arduino Uno R3 (CH340G, Micro USB)", "Microcontrollers", 239.0, 50, "Robocraze", "https://robocraze.com/products/uno-r3-board-compatible-with-arduino", "ATmega328P-based microcontroller board.", "https://robu.in/wp-content/uploads/2014/08/uno_r3_front.jpg"),
+            ("Raspberry Pi 4 Model B (4GB RAM)", "Microcontrollers", 5546.0, 15, "Robocraze", "https://robocraze.com/products/raspberry-pi-4-model-b-4gb-ram", "Broadcom BCM2711 Quad-core Cortex-A72 SBC.", "https://robu.in/wp-content/uploads/2019/06/Raspberry-Pi-4-Model-B-4-GB-RAM-ROBU.IN-2-300x300.jpg"),
+            ("HC-SR04 Ultrasonic Sensor", "Sensors", 59.0, 100, "Robocraze", "https://robocraze.com/products/hc-sr-04-ultrasonic-sensor", "Non-contact ultrasonic distance sensor.", "https://robu.in/wp-content/uploads/2014/12/hc-sr04-ultrasonic-range-finder-module.jpg"),
+            ("L298N Motor Driver", "Modules", 136.0, 150, "Robocraze", "https://robocraze.com/products/l298-motor-driver-module", "Dual H-bridge motor driver module.", "https://robu.in/wp-content/uploads/2015/04/l298-motor-driver-module-1-300x300.jpg"),
+            ("SG90 9G Micro Servo", "Robotics", 89.0, 90, "Robocraze", "https://robocraze.com/collections/servo-motors-controllers", "TowerPro SG90 micro servo.", "https://robu.in/wp-content/uploads/2015/09/sg90-tower-pro-micro-servo-motor-1-300x300.jpg")
         ]
-        import urllib.parse
         for p in initial_data:
-            img = f"https://image.pollinations.ai/prompt/{urllib.parse.quote_plus(p[0])}%20electronic%20component%20realistic%20white%20background"
             cursor.execute('''INSERT INTO products (name, category, price, stock, image, source, rating, source_url, description)
                              VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)''',
-                          (p[0], p[1], p[2], p[3], img, p[4], 4.8, p[5], p[6]))
+                          (p[0], p[1], p[2], p[3], p[7], p[4], 4.8, p[5], p[6]))
     
     db.commit()
     db.close()
