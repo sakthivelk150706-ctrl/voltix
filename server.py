@@ -116,6 +116,7 @@ def init_db():
     cursor = db.cursor()
     cursor.execute("SELECT COUNT(*) FROM products")
     if cursor.fetchone()[0] == 0:
+        # Format: (Name, Category, Supplier_Base_Price, Stock, Source, Source_URL, Description, Image)
         initial_data = [
             ("Arduino Uno R3 (CH340G, Micro USB)", "Microcontrollers", 449.0, 50, "Robocraze", "https://robocraze.com/products/uno-r3-board-compatible-with-arduino", "ATmega328P-based microcontroller board.", "https://www.electronicscomp.com/image/cache/catalog/arduino-uno-r3-board-with-dip-atmega328p-228x228.jpg"),
             ("Raspberry Pi 5 Model (4GB RAM)", "Microcontrollers", 13199.0, 15, "Robocraze", "https://robocraze.com/products/raspberry-pi-4-model-b-4gb-ram", "Broadcom Quad-core Cortex-A76 SBC.", "https://www.electronicscomp.com/image/cache/catalog/raspberry-pi-5-model-4gb-228x228.png"),
@@ -124,9 +125,13 @@ def init_db():
             ("Tower Pro SG90 Micro Servo", "Robotics", 76.0, 90, "Robocraze", "https://robocraze.com/products/sg90-servo-motor", "TowerPro SG90 micro servo.", "https://www.electronicscomp.com/image/cache/catalog/sg90-servo-motor-india-228x228.jpg")
         ]
         for p in initial_data:
+            base_price = p[2]
+            # Standard Voltix Markup: 20% Profit/Packing/GST buffer + ₹49 Delivery
+            final_price = round(base_price * 1.20 + 49, 2)
+            
             cursor.execute('''INSERT INTO products (name, category, price, stock, image, source, rating, source_url, description)
                              VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)''',
-                          (p[0], p[1], p[2], p[3], p[7], p[4], 4.8, p[5], p[6]))
+                          (p[0], p[1], final_price, p[3], p[7], p[4], 4.8, p[5], p[6]))
     
     db.commit()
     db.close()
@@ -337,8 +342,10 @@ def grok_ai():
         img_url = img_match.group(1) if img_match else "https://placehold.co/80x80"
         source_url = link_match.group(1) if link_match else url
         
-        # Markup: 5% packing + 49 delivery
-        final_price = round(base_price * 1.05 + 49, 2)
+        # Standard Voltix Markup: 20% Profit/Packing/GST buffer + ₹49 Delivery
+        final_price = round(base_price * 1.20 + 49, 2)
+        profit_margin = round(base_price * 0.15, 2)
+        packing_charge = round(base_price * 0.05, 2)
         
         # Insert into DB so cart works
         db = get_db()
@@ -354,12 +361,12 @@ def grok_ai():
             "product_name": title,
             "category": "AI Sourced",
             "base_price": base_price,
-            "packing_charge": round(base_price * 0.05, 2),
+            "packing_charge": packing_charge,
             "delivery_charge": 49,
             "final_price": final_price,
             "source_url": source_url,
             "image": img_url,
-            "reason": "Scraped exact real-world price directly from ElectronicsComp.",
+            "reason": f"Scraped base price of ₹{base_price} from ElectronicsComp. Added 20% (Profit & Packing) and ₹49 Delivery.",
             "description": "High-quality electronic component sourced directly from market."
         }
         return jsonify({"result": json.dumps(response_data)})
