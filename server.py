@@ -158,9 +158,8 @@ def init_db():
     db.execute('DELETE FROM products WHERE source=%s', ('Robocraze',))
     
     # Seed products if empty (important for Render ephemeral disk)
-    cursor = db.conn.cursor()
-    cursor.execute("SELECT COUNT(*) FROM products")
-    if cursor.fetchone()[0] == 0:
+    cur = db.execute("SELECT COUNT(*) FROM products")
+    if cur.fetchone()[0] == 0:
         # Format: (Name, Category, Supplier_Base_Price, Stock, Source, Source_URL, Description, Image)
         initial_data = [
             ("Arduino Uno R3 (CH340G, Micro USB)", "Microcontrollers", 449.0, 50, "Robocraze", "https://robocraze.com/products/uno-r3-board-compatible-with-arduino", "ATmega328P-based microcontroller board.", "https://www.electronicscomp.com/image/cache/catalog/arduino-uno-r3-board-with-dip-atmega328p-228x228.jpg"),
@@ -174,7 +173,7 @@ def init_db():
             # Standard Voltix Markup: 20% Profit/Packing buffer.
             final_price = round(base_price * 1.20, 2)
             
-            cursor.execute('''INSERT INTO products (name, category, price, stock, image, source, rating, source_url, description)
+            db.execute('''INSERT INTO products (name, category, price, stock, image, source, rating, source_url, description)
                              VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)''',
                           (p[0], p[1], final_price, p[3], p[7], p[4], 4.8, p[5], p[6]))
     
@@ -496,15 +495,13 @@ def create_order():
         return jsonify({"error": "Missing items, address, phone, or pincode"}), 400
         
     db = get_db()
-    cursor = db.cursor()
     
     total = 0
     for item in items:
         pid = item.get("id")
         qty = item.get("qty")
         
-        cursor.execute("SELECT stock, price FROM products WHERE id = ?", (pid,))
-        row = cursor.fetchone()
+        row = db.execute("SELECT stock, price FROM products WHERE id = ?", (pid,)).fetchone()
         if not row:
             return jsonify({"error": f"Product {pid} not found"}), 400
             
@@ -514,7 +511,7 @@ def create_order():
             
         total += price * qty
         # Deduct stock
-        cursor.execute("UPDATE products SET stock = stock - ? WHERE id = ?", (qty, pid))
+        db.execute("UPDATE products SET stock = stock - ? WHERE id = ?", (qty, pid))
         
     order_id = "ORD-" + secrets.token_hex(4).upper()
     db.execute(
@@ -568,10 +565,9 @@ def my_orders():
         return jsonify({"error": "Admin access required"}), 403
     
     db = get_db()
-    cursor = db.cursor()
-    cursor.execute("SELECT id, items, total, userEmail, address, customer_phone, delivery_charge, delivery_days, status, payment_verified, stage FROM orders WHERE userEmail = ?", (session["email"],))
+    cur = db.execute("SELECT id, items, total, userEmail, address, customer_phone, delivery_charge, delivery_days, status, payment_verified, stage FROM orders WHERE userEmail = ?", (session["email"],))
     orders = []
-    for r in cursor.fetchall():
+    for r in cur.fetchall():
         orders.append({
             "id": r[0], "items": json.loads(r[1]), "total": r[2],
             "userEmail": r[3], "address": r[4], "phone": r[5], "delivery_charge": r[6], "delivery_days": r[7], "status": r[8],
@@ -586,10 +582,9 @@ def admin_orders():
         return jsonify({"error": "Admin access required"}), 403
     
     db = get_db()
-    cursor = db.cursor()
-    cursor.execute("SELECT id, items, total, userEmail, address, customer_phone, delivery_charge, delivery_days, status, payment_verified, stage FROM orders")
+    cur = db.execute("SELECT id, items, total, userEmail, address, customer_phone, delivery_charge, delivery_days, status, payment_verified, stage FROM orders")
     orders = []
-    for r in cursor.fetchall():
+    for r in cur.fetchall():
         orders.append({
             "id": r[0], "items": json.loads(r[1]), "total": r[2],
             "userEmail": r[3], "address": r[4], "phone": r[5], "delivery_charge": r[6], "delivery_days": r[7], "status": r[8],
