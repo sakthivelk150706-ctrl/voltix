@@ -98,17 +98,26 @@ def init_db():
             seller_id INTEGER
         )"""
     )
-    db.execute(
-        """CREATE TABLE IF NOT EXISTS orders (
-            id TEXT PRIMARY KEY,
-            items TEXT NOT NULL,
-            total REAL NOT NULL,
-            userEmail TEXT NOT NULL,
-            address TEXT NOT NULL,
-            status TEXT DEFAULT 'placed', payment_verified INTEGER DEFAULT 0,
-            stage INTEGER DEFAULT 0
-        )"""
-    )
+    db.execute('''CREATE TABLE IF NOT EXISTS orders (
+                    id TEXT PRIMARY KEY,
+                    items TEXT,
+                    total REAL,
+                    userEmail TEXT,
+                    address TEXT,
+                    customer_phone TEXT,
+                    delivery_charge REAL,
+                    status TEXT,
+                    payment_verified INTEGER,
+                    stage INTEGER
+                 )''')
+                 
+    # Safely attempt to add new columns to existing databases
+    try:
+        db.execute('ALTER TABLE orders ADD COLUMN customer_phone TEXT')
+    except: pass
+    try:
+        db.execute('ALTER TABLE orders ADD COLUMN delivery_charge REAL')
+    except: pass
     
     # Purge any old AI-generated or Robu images from the database
     db.execute('DELETE FROM products WHERE source="Robocraze"')
@@ -127,8 +136,8 @@ def init_db():
         ]
         for p in initial_data:
             base_price = p[2]
-            # Standard Voltix Markup: 20% Profit/Packing/GST buffer + ₹49 Delivery
-            final_price = round(base_price * 1.20 + 49, 2)
+            # Standard Voltix Markup: 20% Profit/Packing buffer.
+            final_price = round(base_price * 1.20, 2)
             
             cursor.execute('''INSERT INTO products (name, category, price, stock, image, source, rating, source_url, description)
                              VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)''',
@@ -165,6 +174,9 @@ def get_session():
         return None
     return session
 
+def check_session():
+    # Alias to simplify legacy code usage
+    return get_session()
 
 def require_role(*roles):
     """Use as: session = require_role('admin', 'seller'); if session is None: return 401 response"""
@@ -258,6 +270,28 @@ def promote():
     db.commit()
     return jsonify({"ok": True})
 
+@app.route('/api/admin/set_delivery', methods=['POST'])
+def admin_set_delivery():
+    session = check_session()
+    if not session or session.get("role") != "admin":
+        return jsonify({"error": "Admin access required"}), 403
+        
+    data = request.json or {}
+    order_id = data.get("orderId")
+    delivery_charge = data.get("deliveryCharge")
+    
+    if not order_id or delivery_charge is None:
+        return jsonify({"error": "Missing orderId or deliveryCharge"}), 400
+        
+    db = get_db()
+    try:
+        delivery_charge = float(delivery_charge)
+        db.execute("UPDATE orders SET delivery_charge = ?, status = 'confirmed', stage = 1 WHERE id = ?", (delivery_charge, order_id))
+        db.commit()
+        return jsonify({"success": True})
+    except ValueError:
+        return jsonify({"error": "Invalid delivery charge"}), 400
+
 
 # ---------- products ----------
 
@@ -310,7 +344,6 @@ def delete_product(product_id):
 def grok_ai():
     data = request.json or {}
     query = data.get('prompt', '')
-    # The frontend passes a long prompt, let's extract the actual search term
     import re, urllib.request, urllib.parse
     match = re.search(r'searched for: "(.*?)"', query)
     search_term = match.group(1) if match else "arduino"
@@ -343,12 +376,10 @@ def grok_ai():
         img_url = img_match.group(1) if img_match else "https://placehold.co/80x80"
         source_url = link_match.group(1) if link_match else url
         
-        # Standard Voltix Markup: 20% Profit/Packing/GST buffer + ₹49 Delivery
-        final_price = round(base_price * 1.20 + 49, 2)
-        profit_margin = round(base_price * 0.15, 2)
-        packing_charge = round(base_price * 0.05, 2)
+        # Markup: 20% Profit/Packing buffer.
+        final_price = round(base_price * 1.20, 2)
         
-        # Insert into DB so cart works
+        # Insert into DB
         db = get_db()
         cur = db.execute('''INSERT INTO products (name, category, price, stock, image, source, rating, source_url, description)
                             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)''',
@@ -362,12 +393,9 @@ def grok_ai():
             "product_name": title,
             "category": "AI Sourced",
             "base_price": base_price,
-            "packing_charge": packing_charge,
-            "delivery_charge": 49,
             "final_price": final_price,
             "source_url": source_url,
             "image": img_url,
-            "reason": f"Scraped base price of ₹{base_price} from ElectronicsComp. Added 20% (Profit & Packing) and ₹49 Delivery.",
             "description": "High-quality electronic component sourced directly from market."
         }
         return jsonify({"result": json.dumps(response_data)})
@@ -381,37 +409,84 @@ def voltix_ai():
 
 # ---------- orders ----------
 
-@app.route("/api/orders", methods=["POST"])
+@app.route('/api/calculate_delivery', methods=['POST'])
+def calculate_delivery():
+    data = request.json or {}
+    pincode = data.get("pincode", "").strip()
+    
+    if not pincode or len(pincode) != 6 or not pincode.isdigit():
+        return jsonify({"error": "Invalid PIN Code"}), 400
+        
+    # Simple deterministic mock algorithm based on Indian PIN codes
+    # For a real app, integrate Shiprocket API here.
+    first_digit = pincode[0]
+    
+    if first_digit in ['6']: # South India (Assuming warehouse is here)
+        charge = 40.0
+        days = "1-2 days"
+    elif first_digit in ['7', '8', '9']: # East/North East India (Far)
+        charge = 120.0
+        days = "5-7 days"
+    elif first_digit in ['1']: # North India
+        charge = 90.0
+        days = "4-5 days"
+    else: # Central/West India
+        charge = 65.0
+        days = "3-4 days"
+        
+    return jsonify({"success": True, "charge": charge, "days": days})
+
+@app.route('/api/orders', methods=['POST'])
 def create_order():
-    session, err = require_role("buyer", "seller", "admin")
-    if err:
-        return err
-    data = request.get_json(force=True) or {}
-    items = data.get("items", [])
-    if not items:
-        return jsonify({"error": "Empty cart"}), 400
-
+    session = check_session()
+    if not session:
+        return jsonify({"error": "Unauthorized"}), 401
+    
+    data = request.json or {}
+    items = data.get("items", []) # array of {id, qty, ...}
+    address = data.get("address", "")
+    phone = data.get("phone", "")
+    pincode = data.get("pincode", "")
+    
+    if not items or not address or not phone or not pincode:
+        return jsonify({"error": "Missing items, address, phone, or pincode"}), 400
+        
+    # Calculate delivery automatically based on pincode
+    first_digit = pincode[0]
+    if first_digit in ['6']: charge = 40.0
+    elif first_digit in ['7', '8', '9']: charge = 120.0
+    elif first_digit in ['1']: charge = 90.0
+    else: charge = 65.0
+        
     db = get_db()
-    # Check stock for all items
+    cursor = db.cursor()
+    
+    total = 0
     for item in items:
-        product = db.execute("SELECT stock FROM products WHERE id=?", (item["id"],)).fetchone()
-        if not product or product["stock"] < item["qty"]:
-            return jsonify({"error": f"Product {item['id']} unavailable or insufficient stock"}), 400
-
-    # Deduct stock
-    for item in items:
-        db.execute("UPDATE products SET stock = stock - ? WHERE id=?", (item["qty"], item["id"]))
-
-    total = float(data.get("total", 0.0))
-    address = data.get("address", "N/A")
-    order_id = "VLX-" + secrets.token_hex(4).upper()
-
-    cur = db.execute(
-        "INSERT INTO orders (id, items, total, userEmail, address, status, payment_verified, stage) VALUES (?,?,?,?,?,?,?,?)",
-        (order_id, json.dumps(items), total, session["email"], address, 'pending_payment', 0, 0),
+        pid = item.get("id")
+        qty = item.get("qty")
+        
+        cursor.execute("SELECT stock, price FROM products WHERE id = ?", (pid,))
+        row = cursor.fetchone()
+        if not row:
+            return jsonify({"error": f"Product {pid} not found"}), 400
+            
+        stock, price = row
+        if qty > stock:
+            return jsonify({"error": f"Not enough stock for product {pid}"}), 400
+            
+        total += price * qty
+        # Deduct stock
+        cursor.execute("UPDATE products SET stock = stock - ? WHERE id = ?", (qty, pid))
+        
+    order_id = "ORD-" + secrets.token_hex(4).upper()
+    db.execute(
+        "INSERT INTO orders (id, items, total, userEmail, address, customer_phone, delivery_charge, status, payment_verified, stage) VALUES (?,?,?,?,?,?,?,?,?,?)",
+        (order_id, json.dumps(items), total, session["email"], f"{address} - {pincode}", phone, charge, 'confirmed', 0, 1)
     )
     db.commit()
-    return jsonify({"order_id": order_id, "status": "pending_payment"})
+    
+    return jsonify({"success": True, "orderId": order_id, "delivery_charge": charge})
 
 
 @app.route("/api/orders/<int:order_id>/verify_payment", methods=["POST"])
@@ -453,15 +528,18 @@ def advance_order(order_id):
 def my_orders():
     session, err = require_role("buyer", "seller", "admin", "delivery")
     if err:
-        return err
+        return jsonify({"error": "Admin access required"}), 403
+    
     db = get_db()
-    cur = db.execute("SELECT * FROM orders WHERE userEmail = ?", (session["email"],))
-    rows = cur.fetchall()
+    cursor = db.cursor()
+    cursor.execute("SELECT id, items, total, userEmail, address, customer_phone, delivery_charge, status, payment_verified, stage FROM orders WHERE userEmail = ?", (session["email"],))
     orders = []
-    for r in rows:
-        d = dict(r)
-        d["items"] = json.loads(d["items"])
-        orders.append(d)
+    for r in cursor.fetchall():
+        orders.append({
+            "id": r[0], "items": json.loads(r[1]), "total": r[2],
+            "userEmail": r[3], "address": r[4], "phone": r[5], "delivery_charge": r[6], "status": r[7],
+            "payment_verified": bool(r[8]), "stage": r[9]
+        })
     return jsonify(orders)
 
 
