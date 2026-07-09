@@ -465,6 +465,8 @@ def grok_ai():
             "product_name": title,
             "category": "AI Sourced",
             "base_price": base_price,
+            "packing_charge": round(base_price * 0.05, 2),
+            "delivery_charge": "TBD",
             "final_price": final_price,
             "source_url": source_url,
             "image": img_url,
