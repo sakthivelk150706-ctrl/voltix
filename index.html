@@ -1165,10 +1165,7 @@ async function runAiSearch(){
   btn.textContent = '⏳ Searching...';
   resultDiv.classList.remove('show');
 
-  // Just passing id, name, price, stock, rating to AI to reduce token size
-  const catalogData = products.map(p=>({id:p.id, name:p.name, category:p.category, price:p.price, stock:p.stock, rating:p.rating||4.5}));
-
-  const prompt = `You are the Voltix & CO AI Sourcing Agent. The buyer said: "${input}". Look at our catalog: ${JSON.stringify(catalogData)}. Your job is to find this exact item. IF it is in our catalog, return it. IF IT IS NOT in our catalog, YOU MUST SOURCE IT DYNAMICALLY. You are an expert at standard, trusted electronic components. Estimate a highly competitive, realistic wholesale price in INR. For dynamically sourced items, generate a trusted search URL: "https://robu.in/search?q=" + encoded product name. Add a 5% packing fee and flat ₹49 delivery charge. YOU MUST openly mention the source name (e.g. Amazon, Robu, Robocraze) in the reason to build trust, showing you found the cheapest price across the web for them. Return ONLY valid JSON matching this schema: { "found": true, "product_id": (id if in catalog, or "NEW" if dynamically sourced), "product_name": "<name>", "category": "Components", "base_price": <number>, "packing_charge": <number>, "delivery_charge": 49, "final_price": <number>, "source_url": "<the catalog source_url or the robu.in search url>", "reason": "Short enthusiastic message explaining you analyzed the market and sourced the cheapest, trusted option from [Source Name].", "description": "A detailed 2-3 sentence description of the electronic component explaining its specifications and typical use cases." }. If it is completely impossible to source (like a space shuttle), return {"found": false, "reason": "Not available."}`;
+  const prompt = `You are the Voltix & CO AI Sourcing Agent. The buyer searched for: "${input}". Your job is to act as a dynamic web sourcing engine. DO NOT check any internal catalog. You MUST SOURCE IT DYNAMICALLY from trusted Indian electronics websites (e.g., Robu, Robocraze, ElectronicsComp). Estimate a highly competitive, realistic retail price in INR based on real-world data. Generate a trusted search URL for the item (e.g., "https://robu.in/search?q=" + encoded product name). Add a 5% packing fee and flat ₹49 delivery charge. YOU MUST openly mention the source website you are quoting to build trust. Return ONLY valid JSON matching this exact schema, NO MARKDOWN, NO OTHER TEXT: { "found": true, "product_id": "NEW", "product_name": "<name>", "category": "Components", "base_price": <number>, "packing_charge": <number>, "delivery_charge": 49, "final_price": <number>, "source_url": "<the external search url>", "reason": "Short enthusiastic message explaining you sourced the cheapest option directly from [Source Name].", "description": "A detailed 2-3 sentence description of the component." }. If it is completely impossible to source, return {"found": false, "reason": "Not available."}`;
 
   try {
     const res = await apiPost('/api/grok', {prompt});
@@ -1178,36 +1175,17 @@ async function runAiSearch(){
       if(data.found){
         let prodId = data.product_id;
         
-        // If it's a dynamically sourced new item, save it to our database instantly!
+        // If it's a dynamically sourced new item, we do NOT save it to the database anymore!
+        // The user just wants the AI to provide external website links for less price.
+        let imgUrl = "https://placehold.co/80x80";
+        let foundProd = products.find(x => x.id == prodId);
+        
         if (prodId === "NEW") {
-          const imgUrl = "https://image.pollinations.ai/prompt/" + encodeURIComponent(data.product_name + " electronic component realistic top down photography white background");
-          const newProd = {
-            name: data.product_name,
-            category: data.category || "Components",
-            price: data.base_price,
-            stock: 50,
-            image: imgUrl,
-            source: "AI Sourced",
-            rating: 4.8,
-            source_url: data.source_url,
-            description: data.description || "High-quality electronic component sourced dynamically by Voltix AI."
-          };
-          const createdRes = await apiPost('/api/products', newProd);
-          if (createdRes.id) {
-            prodId = createdRes.id;
-            // Also refresh local catalog
-            const cat = await apiGet('/api/products');
-            products = cat.map(p => {
-              if (p.image && p.image.startsWith('/')) {
-                p.image = BASE_URL + p.image;
-              }
-              return p;
-            });
-            renderProducts();
-          }
+          imgUrl = "https://image.pollinations.ai/prompt/" + encodeURIComponent(data.product_name + " electronic component realistic top down photography white background");
+          foundProd = { image: imgUrl };
+        } else if (!foundProd) {
+          foundProd = { image: "https://placehold.co/80x80" };
         }
-
-        const foundProd = products.find(x => x.id == prodId) || { image: data.image || "https://placehold.co/80x80" };
         const displayImg = foundProd.image || "";
 
         resultDiv.innerHTML = `
