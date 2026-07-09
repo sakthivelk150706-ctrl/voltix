@@ -914,6 +914,106 @@ function showToast(msg){
   const t = document.getElementById('toast');
   t.textContent = msg;
   t.classList.add('show');
+  clearTimeout(window._toastTimer);
+  window._toastTimer = setTimeout(()=> t.classList.remove('show'), 2500);
+}
+
+// Delivery Dashboard
+document.getElementById('deliveryBtn').addEventListener('click', ()=>{ renderDeliveryOrders(); document.getElementById('deliveryModal').classList.add('open'); });
+document.getElementById('closeDelivery').addEventListener('click', ()=>{ document.getElementById('deliveryModal').classList.remove('open'); });
+function renderDeliveryOrders(){
+  const list = document.getElementById('deliveryOrdersList');
+  if(orders.length === 0){ list.innerHTML = `<div class="empty-note">No active orders.</div>`; return; }
+  list.innerHTML = orders.map(o=>`
+    <div class="card" style="padding:14px;display:flex;flex-direction:row;align-items:flex-start;justify-content:space-between;margin-bottom:10px;">
+      <div><div class="order-id">${o.id}</div>
+        <div style="font-size:0.8rem;margin-top:4px;">User: ${o.userEmail}</div>
+        <div style="font-size:0.75rem;color:var(--text);margin-top:2px;padding:4px;background:rgba(255,255,255,0.05);border-radius:4px;">📍 ${o.address || 'No address provided'}</div>
+        <div style="margin-top:8px;font-size:0.8rem;color:var(--text);">
+          ${o.items.map(i => {
+            const prod = products.find(p=>p.id===i.id);
+            if(!prod) return '';
+            return `<div>${i.qty}x ${prod.name} 
+              <a href="${prod.source_url || '#'}" target="_blank" style="color:var(--volt);text-decoration:none;margin-left:8px;font-size:0.75rem;">📦 Buy from Supplier</a>
+            </div>`;
+          }).join('')}
+        </div>
+        <div style="color:var(--circuit);font-size:0.85rem;font-weight:600;margin-top:8px;">${stages[o.stage]}</div></div>
+      <div style="display:flex;flex-direction:column;gap:8px;">
+        ${o.stage >= 1 && o.stage < stages.length-1 ? `<button class="btn-ghost" style="padding:6px 10px;font-size:0.75rem;border-color:var(--volt);color:var(--volt);" onclick="window.open('https://rapido.bike/parcel','_blank')">🚚 Rapido</button>` : ''}
+        ${o.stage < stages.length-1 ? `<button class="btn-primary" style="padding:6px 10px;font-size:0.75rem;" onclick="advanceDeliveryOrder('${o.id}')">Advance</button>` : `<span style="color:var(--muted);font-size:0.8rem;">Delivered</span>`}
+      </div>
+    </div>`).join('');
+}
+window.advanceDeliveryOrder = async function(id){
+  const order = orders.find(o=>o.id===id);
+  if(order && order.stage < stages.length-1){
+    await apiPost('/api/orders/advance', {id});
+    order.stage++;
+    saveState(); renderDeliveryOrders(); renderMyOrders();
+    showToast(`Order ${id} advanced to ${stages[order.stage]}`);
+  }
+}
+
+// Product Details
+let currentProductViewId = null;
+window.openProductDetails = function(id){
+  const p = products.find(x=>x.id===id);
+  if(!p) return;
+  currentProductViewId = id;
+  document.getElementById('pdIcon').innerHTML = `<img src="${p.image}" style="width:100%;height:100%;object-fit:contain;">`;
+  document.getElementById('pdIcon').style.padding = "0";
+  document.getElementById('pdIcon').style.overflow = "hidden";
+  document.getElementById('pdIcon').style.background = "#fff";
+  document.getElementById('pdCat').textContent = p.category;
+  document.getElementById('pdName').textContent = p.name;
+  document.getElementById('pdPrice').textContent = "₹" + p.price.toLocaleString('en-IN');
+  document.getElementById('pdDesc').textContent = p.description || 'High-quality electronic component sourced for Voltix & CO.';
+  
+  const sourceLink = document.getElementById('pdSourceLink');
+  if (p.source_url) {
+    sourceLink.href = p.source_url;
+    sourceLink.textContent = p.source || 'Original Supplier';
+    sourceLink.parentElement.style.display = 'flex';
+  } else {
+    sourceLink.parentElement.style.display = 'none';
+  }
+  document.getElementById('prodDetailsModal').classList.add('open');
+};
+document.getElementById('closePdBtn').addEventListener('click', ()=>{ document.getElementById('prodDetailsModal').classList.remove('open'); });
+document.getElementById('pdAddBtn').addEventListener('click', ()=>{ if(currentProductViewId) addToCart(currentProductViewId); });
+
+// DBMS
+document.getElementById('dbmsBtn').addEventListener('click', ()=>{ document.getElementById('dbmsModal').classList.add('open'); renderDbTable('users'); });
+document.getElementById('closeDbms').addEventListener('click', ()=>{ document.getElementById('dbmsModal').classList.remove('open'); });
+document.querySelectorAll('.tab[data-dbtab]').forEach(t=>{
+  t.addEventListener('click', ()=>{
+    document.querySelectorAll('.tab[data-dbtab]').forEach(x=>x.classList.remove('active'));
+    t.classList.add('active');
+    renderDbTable(t.dataset.dbtab);
+  });
+});
+async function renderDbTable(table){
+  const wrap = document.getElementById('dbContent');
+  wrap.innerHTML = '<div style="text-align:center;color:var(--muted);padding:20px;">Loading...</div>';
+  try {
+    const data = await apiGet('/api/' + table);
+    if(data.error) { wrap.innerHTML = `<div class="empty-note">${data.error}</div>`; return; }
+    if(!data || !data.length){ wrap.innerHTML = '<div class="empty-note">Table is empty.</div>'; return; }
+    
+    if (table === 'orders') {
+      wrap.innerHTML = `
+        <div style="display:flex; flex-direction:column; gap:16px; width:100%;">
+          ${data.map(o => {
+            const itemsHtml = o.items.map(item => {
+              const p = products.find(pr => pr.id === item.id);
+              if (!p) return `<div style="font-size:0.85rem;color:var(--muted);">Product ID #${item.id} (Deleted) x ${item.qty}</div>`;
+              return `
+                <div style="display:flex; justify-content:space-between; align-items:center; background:rgba(255,255,255,0.02); padding:8px 12px; border-radius:8px; border:1px solid rgba(255,255,255,0.05); margin-bottom:6px;">
+                  <div>
+                    <strong style="color:var(--text);">${p.name}</strong> 
+                    <span style="color:var(--muted); font-size:0.85rem; margin-left:8px;">Qty: ${item.qty}</span>
+                  </div>
                   <div>
                     <a href="${p.source_url || '#'}" target="_blank" style="color:var(--volt); font-size:0.85rem; text-decoration:underline; font-weight:600;">
                       Order from ${p.source || 'Supplier'}
