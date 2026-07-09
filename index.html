@@ -443,10 +443,9 @@
         <option value="buyer">Buyer — shop products</option>
         <option value="seller">Seller — add & manage products</option>
         <option value="delivery">Delivery Partner — manage orders</option>
-        <option value="admin">Admin — manage database</option>
       </select>
-      <div id="sellerVerifyWrap" style="display:none;">
-        <label>Verification Code (use "VOLTIX")</label>
+      <div id="sellerVerifyWrap" style="display:none; margin-top: 10px;">
+        <label>Verification Code (Demo Mode: type "DEMO")</label>
         <input type="text" id="suVerifyCode" placeholder="Enter code">
       </div>
       <div class="err-msg" id="suErr"></div>
@@ -513,10 +512,12 @@
       <button id="closePayTopBtn" style="position:absolute;top:16px;right:16px;background:none;border:none;font-size:1.5rem;color:#888;cursor:pointer;">&times;</button>
       <div style="font-weight:700;font-size:1.2rem;color:#1a1a1a;">Secure Payment Gateway</div>
       <div style="font-size:0.8rem;color:#888;margin-top:4px;">Billed by Voltix & CO</div>
-      <div style="font-size:1rem;font-weight:700;color:#3b82f6;font-family:'JetBrains Mono',monospace;margin-top:2px;">Receiver: 8220646847</div>
     </div>
     <div style="padding:24px;background:#f9fafb;overflow-y:auto;max-height:calc(88vh - 100px);">
       <div style="text-align:center;font-size:2rem;font-weight:700;color:#1a1a1a;margin-bottom:20px;font-family:'JetBrains Mono',monospace;" id="payAmount"></div>
+      <p style="color:var(--muted);font-size:0.85rem;margin-bottom:15px;line-height:1.4;">
+        <i>Note: This is a sandbox demo environment. No real payments are processed.</i>
+      </p>
       <div style="margin-bottom:16px;">
         <label style="color:#444;font-weight:600;font-size:0.75rem;">DELIVERY ADDRESS</label>
         <textarea id="deliveryAddress" style="background:#fff;color:#333;border:1px solid #ccc;border-radius:8px;width:100%;padding:10px;resize:none;font-family:inherit;min-height:60px;" placeholder="Enter your full delivery address..."></textarea>
@@ -537,12 +538,12 @@
           <div><input type="password" style="background:#fff;color:#333;border:1px solid #ccc;width:100%;padding:10px;border-radius:8px;" placeholder="CVV"></div>
         </div>
       </div>
-      <div id="upiFields" style="display:block;margin-bottom:16px;text-align:center;">
-        <img id="upiQrImg" src="https://upload.wikimedia.org/wikipedia/commons/d/d0/QR_code_for_mobile_English_Wikipedia.svg" alt="UPI QR Code" style="width:150px;height:150px;border:1px solid #ccc;border-radius:8px;padding:4px;background:#fff;">
-        <div style="font-size:0.8rem;color:#666;margin-top:8px;">Scan with any UPI app to pay</div>
-      </div>
-        <label style="color:#444;font-weight:600;font-size:0.75rem;">UPI ID</label>
-        <input type="text" style="background:#fff;color:#333;border:1px solid #ccc;width:100%;padding:10px;border-radius:8px;" placeholder="e.g. 9876543210@upi">
+      <div id="upiFields" style="margin-bottom:16px;">
+        <label style="color:#444;font-weight:600;font-size:0.75rem;">UPI ID / SCAN QR</label>
+        <div style="background:#fff;padding:15px;border-radius:8px;border:1px solid #ccc;text-align:center;">
+          <img src="https://api.qrserver.com/v1/create-qr-code/?size=150x150&data=upi://pay?pa=demo@upi&pn=VoltixDemo&cu=INR" style="width:120px;height:120px;margin-bottom:10px;">
+          <div style="font-weight:600;color:#222;font-size:0.9rem;">demo@upi</div>
+        </div>
       </div>
       <button class="btn-primary full-btn" style="background:#3b82f6;color:#fff;border-radius:8px;font-size:1rem;padding:12px;" id="confirmPayBtn">✅ I have completed the payment</button>
       <div style="text-align:center;margin-top:16px;">
@@ -560,15 +561,14 @@
     <h2 id="pdName" style="margin-top:4px;"></h2>
     <div style="font-family:'JetBrains Mono';color:var(--volt);font-size:1.4rem;font-weight:700;margin-bottom:12px;" id="pdPrice"></div>
     <div style="color:var(--text);font-size:0.95rem;margin-bottom:12px;line-height:1.4;" id="pdDesc"></div>
-    <div style="color:var(--muted);font-size:0.8rem;margin-bottom:20px;display:flex;align-items:center;gap:6px;">
-      <span>Original Source:</span>
-      <a id="pdSourceLink" href="#" target="_blank" style="color:var(--volt);text-decoration:underline;font-weight:600;"></a>
-    </div>
     <div style="border-top:1px solid var(--border);padding-top:16px;margin-bottom:16px;">
-      <h3 style="font-size:1rem;margin-bottom:8px;">Reviews</h3>
+      <h3 style="font-size:1rem;margin-bottom:8px;">Information</h3>
       <div style="display:flex;align-items:center;gap:8px;">
-        <span style="color:var(--volt);">★★★★☆</span>
-        <span style="color:var(--muted);font-size:0.85rem;">(4.2/5 from 128 users)</span>
+        <span style="color:var(--volt);" id="pdRatingStars">★★★★★</span>
+        <span style="color:var(--muted);font-size:0.85rem;" id="pdRatingText"></span>
+      </div>
+      <div style="margin-top:10px;">
+        <a href="#" target="_blank" id="pdSourceLink" style="color:var(--circuit);font-size:0.85rem;text-decoration:none;">🔗 Original Source</a>
       </div>
     </div>
     <div class="form-actions" style="display:flex;gap:10px;">
@@ -658,6 +658,24 @@ function renderChips(){
   });
 }
 
+function openProductDetails(id){
+  const p = products.find(x=>x.id===id);
+  if(!p) return;
+  document.getElementById('pdIcon').textContent = p.icon || '🔧';
+  document.getElementById('pdCat').textContent = p.category;
+  document.getElementById('pdName').textContent = p.name;
+  document.getElementById('pdPrice').textContent = "₹" + p.price.toLocaleString('en-IN');
+  document.getElementById('pdDesc').textContent = p.description || "A high-quality component for your project needs.";
+  document.getElementById('pdSourceLink').href = p.source_url || "#";
+  const rating = p.rating || (3.5 + Math.random() * 1.5).toFixed(1);
+  document.getElementById('pdRatingStars').textContent = '★'.repeat(Math.floor(rating)) + '☆'.repeat(5-Math.floor(rating));
+  document.getElementById('pdRatingText').textContent = `(${rating}/5 Rating)`;
+  document.getElementById('pdAddBtn').onclick = () => { addToCart(p.id); closePd(); };
+  document.getElementById('prodDetailsModal').classList.add('open');
+}
+function closePd(){ document.getElementById('prodDetailsModal').classList.remove('open'); }
+document.getElementById('closePdBtn').addEventListener('click', closePd);
+
 function renderProducts(){
   const grid = document.getElementById('productGrid');
   const filtered = products.filter(p=>{
@@ -672,8 +690,8 @@ function renderProducts(){
   }
   grid.innerHTML = filtered.map(p=>{
     const low = p.stock <= 8;
-    const rating = p.rating || 4.5;
-    const stars = '★'.repeat(Math.floor(rating)) + (rating % 1 >= 0.5 ? '½' : '') + '☆'.repeat(5 - Math.ceil(rating));
+    const rating = p.rating || (3.5 + Math.random() * 1.5).toFixed(1);
+    const stars = '★'.repeat(Math.floor(rating)) + '☆'.repeat(5-Math.floor(rating));
     return `
     <div class="card">
       <div class="card-media" style="cursor:pointer;padding:0;overflow:hidden;background:#fff;" onclick="openProductDetails(${p.id})">
@@ -783,7 +801,7 @@ document.querySelectorAll('.tab[data-tab]').forEach(t=>{
 });
 
 document.getElementById('suRole').addEventListener('change', (e)=>{
-  document.getElementById('sellerVerifyWrap').style.display = (e.target.value === 'seller' || e.target.value === 'admin') ? 'block' : 'none';
+  document.getElementById('sellerVerifyWrap').style.display = (e.target.value === 'seller') ? 'block' : 'none';
 });
 
 document.getElementById('suSubmit').addEventListener('click', async ()=>{
@@ -793,9 +811,9 @@ document.getElementById('suSubmit').addEventListener('click', async ()=>{
   const role = document.getElementById('suRole').value;
   const err = document.getElementById('suErr');
   if(!name || !email || !pass){ err.textContent = "Please fill in every field."; return; }
-  if(role === 'seller' || role === 'admin') {
+  if(role === 'seller') {
     const code = document.getElementById('suVerifyCode').value.trim();
-    if(code !== 'VOLTIX') { err.textContent = "Invalid verification code."; return; }
+    if(code.toUpperCase() !== 'DEMO') { err.textContent = "Invalid verification code for demo."; return; }
   }
   const user = {name, email, pass, role};
   const res = await apiPost('/api/users', user);
