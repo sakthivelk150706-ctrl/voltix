@@ -297,6 +297,23 @@ def admin_set_delivery():
     except ValueError:
         return jsonify({"error": "Invalid delivery charge"}), 400
 
+@app.route('/api/admin/cancel_order', methods=['POST'])
+def admin_cancel_order():
+    session = check_session()
+    if not session or session.get("role") != "admin":
+        return jsonify({"error": "Admin access required"}), 403
+        
+    data = request.json or {}
+    order_id = data.get("orderId")
+    
+    if not order_id:
+        return jsonify({"error": "Missing orderId"}), 400
+        
+    db = get_db()
+    db.execute("UPDATE orders SET status = 'cancelled' WHERE id = ?", (order_id,))
+    db.commit()
+    return jsonify({"success": True})
+
 
 # ---------- products ----------
 

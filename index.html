@@ -837,7 +837,10 @@ async function renderAdminOrders(){
             <input type="number" id="del_chg_${o.id}" placeholder="Charge (₹)" style="flex:1; max-width:100px; padding:5px; background:#1e1e1e; border:1px solid #444; color:#fff;">
             <input type="text" id="del_days_${o.id}" placeholder="Days (e.g. 3-5 days)" style="flex:2; padding:5px; background:#1e1e1e; border:1px solid #444; color:#fff;">
             <button class="btn-primary" onclick="setDeliveryCharge('${o.id}')" style="padding:5px 15px;">Confirm</button>
+            <button class="btn-outline" style="border-color:#ff4444; color:#ff4444; padding:5px 15px;" onclick="cancelOrder('${o.id}')">Reject</button>
           </div>
+        ` : o.status === 'cancelled' ? `
+          <div style="font-size:0.85rem;color:#ff4444;margin-top:10px;font-weight:bold;">Order Cancelled</div>
         ` : `
           <div style="font-size:0.85rem;color:var(--volt);">Delivery Confirmed: ₹${o.delivery_charge} (${o.delivery_days})</div>
         `}
@@ -850,7 +853,13 @@ window.setDeliveryCharge = async (orderId) => {
     const days = document.getElementById('del_days_'+orderId).value || "3-5 days";
     if(!charge) return alert('Enter delivery charge');
     const res = await apiPost('/api/admin/set_delivery', {orderId, deliveryCharge: parseFloat(charge), deliveryDays: days});
-    if(res.success) { alert('Confirmed!'); renderAdminOrders(); }
+    if(res.success) { alert('Confirmed!'); renderAdminOrders(); renderMyOrders(); }
+};
+
+window.cancelOrder = async (orderId) => {
+    if(!confirm("Are you sure you want to cancel this order?")) return;
+    const res = await apiPost('/api/admin/cancel_order', {orderId});
+    if(res.success) { alert('Order Cancelled'); renderAdminOrders(); renderMyOrders(); }
 };
 
 function renderMyOrders(){
@@ -864,10 +873,10 @@ function renderMyOrders(){
         <div style="display:flex;justify-content:space-between;align-items:center;">
           <div>
             ${o.status === 'pending_confirmation' 
-              ? `<span style="color:orange; font-weight:bold;">Awaiting Delivery Quote</span><br><span style="font-size:0.8rem;color:var(--muted);">Checking charges... (Within 6 hrs)</span>` 
-              : `<span class="mono" style="color:var(--volt);">Final Total: ₹${(o.total + o.delivery_charge).toLocaleString('en-IN')}</span><br><span style="font-size:0.8rem;color:var(--text);">Includes ₹${o.delivery_charge} delivery (${o.delivery_days})</span>`}
+              ? `<span style="color:orange; font-weight:bold;">Awaiting Delivery Quote</span><br><span style="font-size:0.85rem;color:var(--muted);display:inline-block;margin-top:4px;">⏱ Please check back within 6 hours to get your confirmed order status.</span>` 
+              : o.status === 'cancelled' ? `<span style="color:#ff4444; font-weight:bold;">Order Cancelled</span>` : `<span class="mono" style="color:var(--volt);">Final Total: ₹${(o.total + o.delivery_charge).toLocaleString('en-IN')}</span><br><span style="font-size:0.8rem;color:var(--text);">Includes ₹${o.delivery_charge} delivery (${o.delivery_days})</span>`}
           </div>
-          <span class="stock-badge ${o.status==='confirmed'?'stock-ok':'stock-low'}">${o.status==='confirmed'?'Pay on Delivery':'Pending'}</span>
+          <span class="stock-badge ${o.status==='confirmed'?'stock-ok':o.status==='cancelled'?'':'stock-low'}">${o.status==='confirmed'?'Pay on Delivery':o.status==='cancelled'?'Cancelled':'Pending'}</span>
         </div>
       </div>`).join('');
     });
