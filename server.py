@@ -117,11 +117,11 @@ def init_db():
     cursor.execute("SELECT COUNT(*) FROM products")
     if cursor.fetchone()[0] == 0:
         initial_data = [
-            ("Arduino Uno R3 (CH340G, Micro USB)", "Microcontrollers", 449.0, 50, "ElectronicsComp", "https://www.electronicscomp.com/arduino-uno-r3-board-with-dip-atmega328p", "ATmega328P-based microcontroller board.", "https://www.electronicscomp.com/image/cache/catalog/arduino-uno-r3-board-with-dip-atmega328p-228x228.jpg"),
-            ("Raspberry Pi 5 Model (4GB RAM)", "Microcontrollers", 13199.0, 15, "ElectronicsComp", "https://www.electronicscomp.com/raspberry-pi-5-model-4gb", "Broadcom Quad-core Cortex-A76 SBC.", "https://www.electronicscomp.com/image/cache/catalog/raspberry-pi-5-model-4gb-228x228.png"),
-            ("HC-SR04 Ultrasonic Sensor", "Sensors", 49.0, 100, "ElectronicsComp", "https://www.electronicscomp.com/hc-sr04-ultrasonic-sensor-module", "Non-contact ultrasonic distance sensor.", "https://www.electronicscomp.com/image/cache/catalog/hc-sr04-ultrasonic-sensor-module-228x228.jpg"),
-            ("L298N Motor Driver", "Modules", 158.0, 150, "ElectronicsComp", "https://www.electronicscomp.com/l298n-dual-h-bridge-dc-stepper-motor-driver-controller-module", "Dual H-bridge motor driver module.", "https://www.electronicscomp.com/image/cache/catalog/l298n-dual-h-bridge-dc-stepper-motor-driver-controller-module-228x228.jpg"),
-            ("Tower Pro SG90 Micro Servo", "Robotics", 76.0, 90, "ElectronicsComp", "https://www.electronicscomp.com/towerpro-sg90-9gm-micro-servo-motor", "TowerPro SG90 micro servo.", "https://www.electronicscomp.com/image/cache/catalog/sg90-servo-motor-india-228x228.jpg")
+            ("Arduino Uno R3 (CH340G, Micro USB)", "Microcontrollers", 449.0, 50, "Robocraze", "https://robocraze.com/products/uno-r3-board-compatible-with-arduino", "ATmega328P-based microcontroller board.", "https://www.electronicscomp.com/image/cache/catalog/arduino-uno-r3-board-with-dip-atmega328p-228x228.jpg"),
+            ("Raspberry Pi 5 Model (4GB RAM)", "Microcontrollers", 13199.0, 15, "Robocraze", "https://robocraze.com/products/raspberry-pi-4-model-b-4gb-ram", "Broadcom Quad-core Cortex-A76 SBC.", "https://www.electronicscomp.com/image/cache/catalog/raspberry-pi-5-model-4gb-228x228.png"),
+            ("HC-SR04 Ultrasonic Sensor", "Sensors", 49.0, 100, "Robocraze", "https://robocraze.com/products/hc-sr-04-ultrasonic-sensor", "Non-contact ultrasonic distance sensor.", "https://www.electronicscomp.com/image/cache/catalog/hc-sr04-ultrasonic-sensor-module-228x228.jpg"),
+            ("L298N Motor Driver", "Modules", 158.0, 150, "Robocraze", "https://robocraze.com/products/l298-motor-driver-module", "Dual H-bridge motor driver module.", "https://www.electronicscomp.com/image/cache/catalog/l298n-dual-h-bridge-dc-stepper-motor-driver-controller-module-228x228.jpg"),
+            ("Tower Pro SG90 Micro Servo", "Robotics", 76.0, 90, "Robocraze", "https://robocraze.com/products/sg90-servo-motor", "TowerPro SG90 micro servo.", "https://www.electronicscomp.com/image/cache/catalog/sg90-servo-motor-india-228x228.jpg")
         ]
         for p in initial_data:
             cursor.execute('''INSERT INTO products (name, category, price, stock, image, source, rating, source_url, description)
