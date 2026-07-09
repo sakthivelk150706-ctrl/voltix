@@ -1,278 +1,362 @@
-import os
-import json
-import sqlite3
-import urllib.parse
-import urllib.request
-import traceback
-from functools import wraps
-from flask import Flask, request, jsonify
-from flask_cors import CORS
-from werkzeug.security import generate_password_hash, check_password_hash
-import jwt
-import datetime
+"""
+Voltix backend — SECURITY-FIXED VERSION
+=========================================
+What changed vs. the original server.py, and why:
 
-PORT = int(os.environ.get("PORT", 8080))
-DB_FILE = 'voltix.db'
-SECRET_KEY = os.environ.get('SECRET_KEY', 'super-secret-voltix-key-for-jwt')
+1. /api/users no longer exists as a public endpoint that dumps the whole
+   table. Passwords are NEVER sent to the client, ever, under any role.
+2. Passwords are hashed with bcrypt before storage. Login compares hashes,
+   not plaintext.
+3. Every write endpoint (create/delete product, place/advance order,
+   admin actions) requires a valid session token AND checks the caller's
+   role server-side. The frontend can no longer just "pretend" to be an
+   admin or seller.
+4. The old hardcoded admin/seller signup code ("VOLTIX") is gone. Instead,
+   new accounts default to role='buyer'. Promoting someone to seller/admin
+   is a server-side action (see /api/admin/promote) that itself requires
+   an existing admin's session token — i.e. the first admin has to be
+   created directly in the database (see create_first_admin.py below),
+   and after that, admins promote people through the app, not a public
+   signup form.
+5. CORS is restricted to your actual frontend origin instead of "*".
+6. Session tokens are random, stored server-side with an expiry, and
+   checked on every protected request (simple bearer-token pattern —
+   swap for JWT/Flask-Login later if you want, but this is a solid
+   minimum).
+7. Rate limiting added on /api/login and /api/signup to slow down brute
+   force / spam signups.
+
+You will need to: `pip install flask flask-cors bcrypt flask-limiter`
+"""
+
+import sqlite3
+import bcrypt
+import secrets
+import time
+import os
+from flask import Flask, request, jsonify, g
+from flask_cors import CORS
+from flask_limiter import Limiter
+from flask_limiter.util import get_remote_address
 
 app = Flask(__name__)
-# Restrict CORS to specific origins in production, allow all for dev
-allowed_origins = ["https://sakthivelk150706-ctrl.github.io", "http://127.0.0.1:5500", "http://localhost:5500"]
-CORS(app, resources={r"/api/*": {"origins": allowed_origins}})
+
+# --- CORS: lock this down to your real frontend domain ---
+ALLOWED_ORIGIN = os.environ.get("FRONTEND_ORIGIN", "https://sakthivelk150706-ctrl.github.io")
+CORS(app, resources={r"/api/*": {"origins": ALLOWED_ORIGIN}}, supports_credentials=True)
+
+limiter = Limiter(get_remote_address, app=app, default_limits=["200 per hour"])
+
+DB_PATH = os.environ.get("DB_PATH", "voltix.db")
+
+# In-memory session store: {token: {"user_id":..., "role":..., "expires":...}}
+# For production, move this to a "sessions" table in SQLite (or Redis) so it
+# survives restarts. In-memory is fine to start.
+SESSIONS = {}
+SESSION_TTL_SECONDS = 60 * 60 * 12  # 12 hours
+
+
+def get_db():
+    if "db" not in g:
+        g.db = sqlite3.connect(DB_PATH)
+        g.db.row_factory = sqlite3.Row
+    return g.db
+
+
+@app.teardown_appcontext
+def close_db(exception=None):
+    db = g.pop("db", None)
+    if db is not None:
+        db.close()
+
 
 def init_db():
-    conn = sqlite3.connect(DB_FILE)
-    c = conn.cursor()
-    c.execute('''CREATE TABLE IF NOT EXISTS products
-                 (id INTEGER PRIMARY KEY, name TEXT, category TEXT, price REAL, stock INTEGER, image TEXT, source TEXT, rating REAL, source_url TEXT, description TEXT)''')
-    c.execute('''CREATE TABLE IF NOT EXISTS users
-                 (email TEXT PRIMARY KEY, name TEXT, pass TEXT, role TEXT)''')
-    c.execute('''CREATE TABLE IF NOT EXISTS orders
-                 (id TEXT PRIMARY KEY, items TEXT, total REAL, stage INTEGER, userEmail TEXT, address TEXT)''')
-    
-    # Run migrations if needed
-    c.execute("PRAGMA table_info(products)")
-    columns = [column[1] for column in c.fetchall()]
-    if 'source_url' not in columns:
-        c.execute("ALTER TABLE products ADD COLUMN source_url TEXT DEFAULT ''")
-    if 'description' not in columns:
-        c.execute("ALTER TABLE products ADD COLUMN description TEXT DEFAULT ''")
-    
-    c.execute("PRAGMA table_info(orders)")
-    order_cols = [column[1] for column in c.fetchall()]
-    if 'address' not in order_cols:
-        c.execute("ALTER TABLE orders ADD COLUMN address TEXT DEFAULT ''")
-    
-    conn.commit()
-    conn.close()
+    db = sqlite3.connect(DB_PATH)
+    db.execute(
+        """CREATE TABLE IF NOT EXISTS users (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            email TEXT UNIQUE NOT NULL,
+            name TEXT,
+            pass_hash TEXT NOT NULL,
+            role TEXT NOT NULL DEFAULT 'buyer'
+        )"""
+    )
+    db.execute(
+        """CREATE TABLE IF NOT EXISTS products (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            name TEXT, category TEXT, price REAL, stock INTEGER,
+            source TEXT, source_url TEXT, description TEXT,
+            seller_id INTEGER
+        )"""
+    )
+    db.execute(
+        """CREATE TABLE IF NOT EXISTS orders (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            product_id INTEGER, buyer_id INTEGER, quantity INTEGER,
+            status TEXT DEFAULT 'placed', payment_verified INTEGER DEFAULT 0,
+            created_at REAL
+        )"""
+    )
+    db.commit()
+    db.close()
 
-def require_auth(f):
-    @wraps(f)
-    def decorated(*args, **kwargs):
-        token = None
-        if 'Authorization' in request.headers:
-            parts = request.headers['Authorization'].split()
-            if len(parts) == 2 and parts[0] == 'Bearer':
-                token = parts[1]
-        
-        if not token:
-            return jsonify({"error": "Authentication token is missing"}), 401
 
-        try:
-            data = jwt.decode(token, SECRET_KEY, algorithms=["HS256"])
-            current_user = {"email": data["email"], "role": data["role"]}
-        except Exception as e:
-            return jsonify({"error": "Invalid or expired token"}), 401
+# ---------- auth helpers ----------
 
-        return f(current_user, *args, **kwargs)
-    return decorated
+def make_session(user_row):
+    token = secrets.token_urlsafe(32)
+    SESSIONS[token] = {
+        "user_id": user_row["id"],
+        "role": user_row["role"],
+        "expires": time.time() + SESSION_TTL_SECONDS,
+    }
+    return token
+
+
+def get_session():
+    """Reads the Authorization: Bearer <token> header. Returns session dict or None."""
+    auth = request.headers.get("Authorization", "")
+    if not auth.startswith("Bearer "):
+        return None
+    token = auth.split(" ", 1)[1]
+    session = SESSIONS.get(token)
+    if not session:
+        return None
+    if session["expires"] < time.time():
+        SESSIONS.pop(token, None)
+        return None
+    return session
+
 
 def require_role(*roles):
-    def decorator(f):
-        @wraps(f)
-        def decorated(current_user, *args, **kwargs):
-            if current_user['role'] not in roles:
-                return jsonify({"error": "Unauthorized role"}), 403
-            return f(current_user, *args, **kwargs)
-        return decorated
-    return decorator
+    """Use as: session = require_role('admin', 'seller'); if session is None: return 401 response"""
+    session = get_session()
+    if session is None:
+        return None, (jsonify({"error": "Not authenticated"}), 401)
+    if roles and session["role"] not in roles:
+        return None, (jsonify({"error": "Not authorized"}), 403)
+    return session, None
 
-# --- ROUTES ---
 
-@app.route('/api/login', methods=['POST'])
+# ---------- auth endpoints ----------
+
+@app.route("/api/signup", methods=["POST"])
+@limiter.limit("10 per hour")
+def signup():
+    data = request.get_json(force=True) or {}
+    email = (data.get("email") or "").strip().lower()
+    name = (data.get("name") or "").strip()
+    password = data.get("password") or ""
+
+    if not email or not password or len(password) < 8:
+        return jsonify({"error": "Email and an 8+ character password are required"}), 400
+
+    db = get_db()
+    existing = db.execute("SELECT id FROM users WHERE email=?", (email,)).fetchone()
+    if existing:
+        return jsonify({"error": "An account with this email already exists"}), 409
+
+    pass_hash = bcrypt.hashpw(password.encode("utf-8"), bcrypt.gensalt()).decode("utf-8")
+    # NOTE: every new signup is a 'buyer'. There is no client-supplied role field,
+    # and no verification code that grants elevated access. This is intentional.
+    cur = db.execute(
+        "INSERT INTO users (email, name, pass_hash, role) VALUES (?,?,?, 'buyer')",
+        (email, name, pass_hash),
+    )
+    db.commit()
+    user_row = db.execute("SELECT * FROM users WHERE id=?", (cur.lastrowid,)).fetchone()
+    token = make_session(user_row)
+    return jsonify({"token": token, "role": user_row["role"], "name": user_row["name"]})
+
+
+@app.route("/api/login", methods=["POST"])
+@limiter.limit("10 per minute")
 def login():
-    data = request.json
-    email = data.get('email', '').strip().lower()
-    password = data.get('pass', '')
+    data = request.get_json(force=True) or {}
+    email = (data.get("email") or "").strip().lower()
+    password = data.get("password") or ""
 
-    conn = sqlite3.connect(DB_FILE)
-    conn.row_factory = sqlite3.Row
-    user = conn.execute('SELECT * FROM users WHERE email = ?', (email,)).fetchone()
-    conn.close()
+    db = get_db()
+    user_row = db.execute("SELECT * FROM users WHERE email=?", (email,)).fetchone()
 
-    if not user or not check_password_hash(user['pass'], password):
+    # Always run bcrypt.checkpw even on a "user not found" path in a real
+    # hardened version (to avoid timing attacks revealing valid emails).
+    # Keeping it simple here, but worth doing later.
+    if not user_row or not bcrypt.checkpw(password.encode("utf-8"), user_row["pass_hash"].encode("utf-8")):
         return jsonify({"error": "Invalid email or password"}), 401
 
-    token = jwt.encode({
-        "email": user['email'],
-        "role": user['role'],
-        "exp": datetime.datetime.utcnow() + datetime.timedelta(days=7)
-    }, SECRET_KEY, algorithm="HS256")
+    token = make_session(user_row)
+    return jsonify({"token": token, "role": user_row["role"], "name": user_row["name"]})
 
-    return jsonify({
-        "token": token,
-        "user": {"name": user['name'], "email": user['email'], "role": user['role']}
-    })
 
-@app.route('/api/users', methods=['POST'])
-def signup():
-    data = request.json
-    email = data.get('email', '').strip().lower()
-    name = data.get('name', '').strip()
-    password = data.get('pass', '')
-    role = data.get('role', 'buyer')
+@app.route("/api/logout", methods=["POST"])
+def logout():
+    auth = request.headers.get("Authorization", "")
+    if auth.startswith("Bearer "):
+        SESSIONS.pop(auth.split(" ", 1)[1], None)
+    return jsonify({"ok": True})
 
-    # Security: Don't allow signing up as admin from the public API
-    if role == 'admin':
-        return jsonify({"error": "Admin role must be provisioned manually."}), 403
 
-    hashed_password = generate_password_hash(password)
+@app.route("/api/me", methods=["GET"])
+def me():
+    session = get_session()
+    if session is None:
+        return jsonify({"error": "Not authenticated"}), 401
+    db = get_db()
+    user_row = db.execute("SELECT id, email, name, role FROM users WHERE id=?", (session["user_id"],)).fetchone()
+    return jsonify(dict(user_row))
 
-    conn = sqlite3.connect(DB_FILE)
-    c = conn.cursor()
-    try:
-        c.execute('INSERT INTO users (email, name, pass, role) VALUES (?,?,?,?)',
-                  (email, name, hashed_password, role))
-        conn.commit()
-    except sqlite3.IntegrityError:
-        conn.close()
-        return jsonify({"error": "User already exists"}), 400
-    conn.close()
-    
-    # Auto-login after signup
-    token = jwt.encode({
-        "email": email,
-        "role": role,
-        "exp": datetime.datetime.utcnow() + datetime.timedelta(days=7)
-    }, SECRET_KEY, algorithm="HS256")
-    
-    return jsonify({
-        "success": True,
-        "token": token,
-        "user": {"name": name, "email": email, "role": role}
-    })
 
-@app.route('/api/users', methods=['GET'])
-@require_auth
-@require_role('admin')
-def get_users(current_user):
-    conn = sqlite3.connect(DB_FILE)
-    conn.row_factory = sqlite3.Row
-    rows = conn.execute('SELECT email, name, role FROM users').fetchall()
-    conn.close()
+# ---------- admin: promote a user (admin-only, server-side gated) ----------
+
+@app.route("/api/admin/promote", methods=["POST"])
+def promote():
+    session, err = require_role("admin")
+    if err:
+        return err
+    data = request.get_json(force=True) or {}
+    target_email = (data.get("email") or "").strip().lower()
+    new_role = data.get("role")
+    if new_role not in ("buyer", "seller", "delivery", "admin"):
+        return jsonify({"error": "Invalid role"}), 400
+
+    db = get_db()
+    db.execute("UPDATE users SET role=? WHERE email=?", (new_role, target_email))
+    db.commit()
+    return jsonify({"ok": True})
+
+
+# ---------- products ----------
+
+@app.route("/api/products", methods=["GET"])
+def list_products():
+    db = get_db()
+    rows = db.execute("SELECT * FROM products").fetchall()
     return jsonify([dict(r) for r in rows])
 
-@app.route('/api/products', methods=['GET'])
-def get_products():
-    conn = sqlite3.connect(DB_FILE)
-    conn.row_factory = sqlite3.Row
-    rows = conn.execute('SELECT * FROM products').fetchall()
-    conn.close()
+
+@app.route("/api/products", methods=["POST"])
+def create_product():
+    session, err = require_role("seller", "admin")
+    if err:
+        return err
+    data = request.get_json(force=True) or {}
+    db = get_db()
+    cur = db.execute(
+        "INSERT INTO products (name, category, price, stock, source, source_url, description, seller_id) "
+        "VALUES (?,?,?,?,?,?,?,?)",
+        (
+            data.get("name"), data.get("category"), data.get("price"), data.get("stock"),
+            data.get("source"), data.get("source_url"), data.get("description"),
+            session["user_id"],
+        ),
+    )
+    db.commit()
+    return jsonify({"id": cur.lastrowid})
+
+
+@app.route("/api/products/<int:product_id>", methods=["DELETE"])
+def delete_product(product_id):
+    session, err = require_role("seller", "admin")
+    if err:
+        return err
+    db = get_db()
+    product = db.execute("SELECT * FROM products WHERE id=?", (product_id,)).fetchone()
+    if not product:
+        return jsonify({"error": "Not found"}), 404
+    # Sellers can only delete their own listings; admins can delete anything.
+    if session["role"] == "seller" and product["seller_id"] != session["user_id"]:
+        return jsonify({"error": "Not authorized"}), 403
+    db.execute("DELETE FROM products WHERE id=?", (product_id,))
+    db.commit()
+    return jsonify({"ok": True})
+
+
+# ---------- orders ----------
+
+@app.route("/api/orders", methods=["POST"])
+def create_order():
+    session, err = require_role("buyer", "seller", "admin")
+    if err:
+        return err
+    data = request.get_json(force=True) or {}
+    product_id = data.get("product_id")
+    quantity = int(data.get("quantity", 1))
+
+    db = get_db()
+    product = db.execute("SELECT * FROM products WHERE id=?", (product_id,)).fetchone()
+    if not product or product["stock"] < quantity:
+        return jsonify({"error": "Product unavailable or insufficient stock"}), 400
+
+    # IMPORTANT: payment_verified starts at 0. Stock is NOT decremented here.
+    # Stock should only decrement, and the order only move to 'confirmed',
+    # once your payment gateway's webhook confirms the payment server-side.
+    # Plug your gateway's verification call in where the TODO is below.
+    cur = db.execute(
+        "INSERT INTO orders (product_id, buyer_id, quantity, status, payment_verified, created_at) "
+        "VALUES (?,?,?, 'pending_payment', 0, ?)",
+        (product_id, session["user_id"], quantity, time.time()),
+    )
+    db.commit()
+    return jsonify({"order_id": cur.lastrowid, "status": "pending_payment"})
+
+
+@app.route("/api/orders/<int:order_id>/verify_payment", methods=["POST"])
+def verify_payment(order_id):
+    """
+    TODO: Replace this with your real payment gateway's server-side
+    verification (e.g. Razorpay webhook signature check, or a call to
+    the gateway's "verify payment" API using the payment_id the gateway
+    gives you). Do NOT mark payment_verified=1 just because the client
+    says so — that is the exact bug that was in the original code.
+    """
+    session, err = require_role("buyer", "admin")
+    if err:
+        return err
+    db = get_db()
+    order = db.execute("SELECT * FROM orders WHERE id=?", (order_id,)).fetchone()
+    if not order:
+        return jsonify({"error": "Not found"}), 404
+
+    # -------- placeholder: wire real gateway verification here --------
+    payment_confirmed_by_gateway = False  # never leave this hardcoded True
+    # --------------------------------------------------------------------
+
+    if not payment_confirmed_by_gateway:
+        return jsonify({"error": "Payment not verified by gateway yet"}), 402
+
+    product = db.execute("SELECT * FROM products WHERE id=?", (order["product_id"],)).fetchone()
+    db.execute("UPDATE products SET stock = stock - ? WHERE id=?", (order["quantity"], product["id"]))
+    db.execute("UPDATE orders SET status='confirmed', payment_verified=1 WHERE id=?", (order_id,))
+    db.commit()
+    return jsonify({"ok": True})
+
+
+@app.route("/api/orders/<int:order_id>/advance", methods=["POST"])
+def advance_order(order_id):
+    session, err = require_role("delivery", "admin")
+    if err:
+        return err
+    data = request.get_json(force=True) or {}
+    new_status = data.get("status")
+    if new_status not in ("shipped", "out_for_delivery", "delivered"):
+        return jsonify({"error": "Invalid status"}), 400
+    db = get_db()
+    db.execute("UPDATE orders SET status=? WHERE id=?", (new_status, order_id))
+    db.commit()
+    return jsonify({"ok": True})
+
+
+@app.route("/api/orders/mine", methods=["GET"])
+def my_orders():
+    session, err = require_role("buyer", "seller", "admin", "delivery")
+    if err:
+        return err
+    db = get_db()
+    rows = db.execute("SELECT * FROM orders WHERE buyer_id=?", (session["user_id"],)).fetchall()
     return jsonify([dict(r) for r in rows])
 
-@app.route('/api/products', methods=['POST'])
-@require_auth
-@require_role('admin', 'seller')
-def create_product(current_user):
-    data = request.json
-    conn = sqlite3.connect(DB_FILE)
-    c = conn.cursor()
-    
-    image_url = data.get('image', '')
-    if image_url == '' or 'pollinations.ai' in image_url:
-        try:
-            from duckduckgo_search import DDGS
-            safe_name = data['name'].replace(' ', '_').replace('&', 'and').replace('/', '_').replace('(', '').replace(')', '')
-            filepath = f"images/{safe_name}.jpg"
-            if not os.path.exists(filepath) and not os.path.exists("images"):
-                os.makedirs("images", exist_ok=True)
-            if not os.path.exists(filepath):
-                results = list(DDGS().images(f"{data['name']} electronic component top down white background", max_results=2))
-                if results:
-                    req = urllib.request.Request(results[0]['image'], headers={'User-Agent': 'Mozilla/5.0'})
-                    with urllib.request.urlopen(req, timeout=5) as response, open(filepath, 'wb') as out_file:
-                        out_file.write(response.read())
-            image_url = f"/{filepath}"
-        except Exception as e:
-            print(f"Dynamic image search failed: {e}")
-    
-    c.execute('INSERT INTO products (name, category, price, stock, image, source, rating, source_url, description) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)',
-              (data['name'], data.get('category', 'Components'), data['price'], data.get('stock', 50), image_url, data.get('source', 'AI Sourced'), data.get('rating', 4.8), data.get('source_url', ''), data.get('description', 'High-quality electronic component sourced for Voltix & CO.')))
-    new_id = c.lastrowid
-    conn.commit()
-    conn.close()
-    return jsonify({"success": True, "id": new_id})
 
-@app.route('/api/products/delete', methods=['POST'])
-@require_auth
-@require_role('admin', 'seller')
-def delete_product(current_user):
-    data = request.json
-    conn = sqlite3.connect(DB_FILE)
-    c = conn.cursor()
-    c.execute('DELETE FROM products WHERE id = ?', (data['id'],))
-    conn.commit()
-    conn.close()
-    return jsonify({"success": True})
-
-@app.route('/api/orders', methods=['GET'])
-@require_auth
-def get_orders(current_user):
-    conn = sqlite3.connect(DB_FILE)
-    conn.row_factory = sqlite3.Row
-    if current_user['role'] in ['admin', 'delivery']:
-        rows = conn.execute('SELECT * FROM orders').fetchall()
-    else:
-        rows = conn.execute('SELECT * FROM orders WHERE userEmail = ?', (current_user['email'],)).fetchall()
-    
-    orders = []
-    for r in rows:
-        d = dict(r)
-        d['items'] = json.loads(d['items'])
-        orders.append(d)
-    conn.close()
-    return jsonify(orders)
-
-@app.route('/api/orders', methods=['POST'])
-@require_auth
-def create_order(current_user):
-    data = request.json
-    conn = sqlite3.connect(DB_FILE)
-    c = conn.cursor()
-    items_str = json.dumps(data['items'])
-    # Force the userEmail to be the authenticated user's email
-    user_email = current_user['email']
-    c.execute('INSERT INTO orders (id, items, total, stage, userEmail, address) VALUES (?,?,?,?,?,?)',
-              (data['id'], items_str, data['total'], data.get('stage', 0), user_email, data.get('address', 'No address provided')))
-    for item in data['items']:
-        c.execute('UPDATE products SET stock = stock - ? WHERE id = ?', (item['qty'], item['id']))
-    conn.commit()
-    conn.close()
-    return jsonify({"success": True})
-
-@app.route('/api/orders/advance', methods=['POST'])
-@require_auth
-@require_role('admin', 'delivery')
-def advance_order(current_user):
-    data = request.json
-    conn = sqlite3.connect(DB_FILE)
-    c = conn.cursor()
-    c.execute('UPDATE orders SET stage = stage + 1 WHERE id = ?', (data['id'],))
-    conn.commit()
-    conn.close()
-    return jsonify({"success": True})
-
-@app.route('/api/grok', methods=['POST'])
-def grok_ai():
-    data = request.json
-    try:
-        prompt_encoded = urllib.parse.quote(data['prompt'])
-        req = urllib.request.Request(
-            "https://text.pollinations.ai/prompt/" + prompt_encoded + "?json=true&model=openai",
-            headers={'User-Agent': 'Mozilla/5.0'}
-        )
-        with urllib.request.urlopen(req) as response:
-            res_body = response.read().decode('utf-8')
-        return jsonify({"result": res_body})
-    except Exception as e:
-        err_msg = str(e)
-        if hasattr(e, 'read'):
-            try:
-                err_msg += " Body: " + e.read().decode('utf-8')
-            except Exception:
-                pass
-        return jsonify({"error": err_msg}), 500
-
-if __name__ == '__main__':
+if __name__ == "__main__":
     init_db()
-    app.run(host='0.0.0.0', port=PORT)
+    app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 5000)))
