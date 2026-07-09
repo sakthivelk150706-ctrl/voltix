@@ -369,16 +369,13 @@
     <div class="hero-ctas">
       <button class="btn-primary" onclick="document.getElementById('catalog').scrollIntoView({behavior:'smooth'})">Shop the catalog</button>
       <button class="btn-ghost" id="heroSellerBtn">Become a seller</button>
-      <a href="https://www.sparkrdlabs.com" target="_blank" class="mentor-link">
-        <span>💡</span> Need project help? Get Paid Mentorship
-      </a>
     </div>
   </div>
 </div>
 
 <div class="ai-bar">
   <div class="ai-search-box">
-    <h3><span class="spark">✨ AI Smart Search</span> — Tell us what you need</h3>
+    <h3><span class="spark">✨ Voltix AI Smart Search</span> — Tell us what you need</h3>
     <div class="ai-input-row">
       <input type="text" id="aiSearchInput" placeholder='e.g. "Find me the cheapest Arduino" or "Best sensor for obstacle detection"'>
       <button id="aiSearchBtn">🔍 Find</button>
@@ -404,7 +401,7 @@
 
 <footer>
   <div>⚡ voltix & CO — All products sourced, packed & delivered by Voltix & CO.</div>
-  <div>Built with HTML · CSS · JS · Python · SQLite · Grok AI</div>
+  <div>Built with HTML · CSS · JS · Python · SQLite · Voltix AI</div>
 </footer>
 
 <div class="overlay" id="overlay"></div>
@@ -541,7 +538,7 @@
       <div id="upiFields" style="margin-bottom:16px;">
         <label style="color:#444;font-weight:600;font-size:0.75rem;">UPI ID / SCAN QR</label>
         <div style="background:#fff;padding:15px;border-radius:8px;border:1px solid #ccc;text-align:center;">
-          <img src="https://api.qrserver.com/v1/create-qr-code/?size=150x150&data=upi://pay?pa=demo@upi&pn=VoltixDemo&cu=INR" style="width:120px;height:120px;margin-bottom:10px;">
+          <img id="upiQrImg" src="" style="width:120px;height:120px;margin-bottom:10px;">
           <div style="font-weight:600;color:#222;font-size:0.9rem;">demo@upi</div>
         </div>
       </div>
@@ -609,7 +606,6 @@
 
 <script>
 let products = [];
-let users = [];
 let currentUser = null;
 let cart = [];
 let orders = [];
@@ -619,13 +615,18 @@ let searchTerm = "";
 const BASE_URL = "https://voltix-4qsh.onrender.com";
 
 async function apiPost(url, data) {
-  const res = await fetch(BASE_URL + url, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(data) });
+  const headers = { 'Content-Type': 'application/json' };
+  const token = localStorage.getItem('voltixToken');
+  if (token) headers['Authorization'] = 'Bearer ' + token;
+  const res = await fetch(BASE_URL + url, { method: 'POST', headers, body: JSON.stringify(data) });
   return await res.json();
 }
 async function apiGet(url) {
-  const res = await fetch(BASE_URL + url);
+  const headers = { 'Authorization': 'Bearer ' + localStorage.getItem('voltixToken') };
+  const res = await fetch(BASE_URL + url, { headers });
   return await res.json();
 }
+
 async function loadState() {
   try {
     let pRes = await fetch(BASE_URL + '/api/products').then(r=>r.json());
@@ -635,8 +636,14 @@ async function loadState() {
       }
       return p;
     });
-    users = await fetch(BASE_URL + '/api/users').then(r=>r.json());
-    orders = await fetch(BASE_URL + '/api/orders').then(r=>r.json());
+    
+    const token = localStorage.getItem('voltixToken');
+    if (token) {
+      try {
+        const oRes = await apiGet('/api/orders');
+        if (!oRes.error) orders = oRes;
+      } catch(e) {}
+    }
     const cu = localStorage.getItem('voltixUser');
     if (cu) currentUser = JSON.parse(cu);
   } catch(e) { console.error("API error", e); }
@@ -661,7 +668,7 @@ function renderChips(){
 function openProductDetails(id){
   const p = products.find(x=>x.id===id);
   if(!p) return;
-  document.getElementById('pdIcon').textContent = p.icon || '🔧';
+  document.getElementById('pdIcon').innerHTML = `<img src="${p.image}" style="width:100%;height:100%;object-fit:contain;">`;
   document.getElementById('pdCat').textContent = p.category;
   document.getElementById('pdName').textContent = p.name;
   document.getElementById('pdPrice').textContent = "₹" + p.price.toLocaleString('en-IN');
@@ -781,7 +788,7 @@ function refreshAuthUI(){
 }
 
 document.getElementById('authBtn').addEventListener('click', ()=>{
-  if(currentUser){ currentUser = null; saveState(); refreshAuthUI(); showToast("Signed out"); }
+  if(currentUser){ currentUser = null; localStorage.removeItem('voltixToken'); localStorage.removeItem('voltixUser'); saveState(); refreshAuthUI(); showToast("Signed out"); }
   else openAuth();
 });
 document.getElementById('heroSellerBtn').addEventListener('click', ()=>{
@@ -815,30 +822,34 @@ document.getElementById('suSubmit').addEventListener('click', async ()=>{
     const code = document.getElementById('suVerifyCode').value.trim();
     if(code.toUpperCase() !== 'DEMO') { err.textContent = "Invalid verification code for demo."; return; }
   }
-  const user = {name, email, pass, role};
-  const res = await apiPost('/api/users', user);
+  const res = await apiPost('/api/signup', {name, email, pass, role});
   if(res.error) { err.textContent = res.error; return; }
-  users.push(user);
-  currentUser = user;
+  currentUser = res.user;
+  localStorage.setItem('voltixToken', res.token);
   saveState();
   err.textContent = "";
   closeAuthFn();
   refreshAuthUI();
-  showToast(`Welcome, ${name.split(' ')[0]}! Account created as ${role}.`);
+  showToast(`Welcome, ${name.split(' ')[0]}!`);
 });
 
-document.getElementById('loginSubmit').addEventListener('click', ()=>{
+document.getElementById('loginSubmit').addEventListener('click', async ()=>{
   const email = document.getElementById('loginEmail').value.trim().toLowerCase();
   const pass = document.getElementById('loginPass').value;
   const err = document.getElementById('loginErr');
-  const user = users.find(u=>u.email===email && u.pass===pass);
-  if(!user){ err.textContent = "No matching account."; return; }
-  currentUser = user;
+  const res = await apiPost('/api/login', {email, pass});
+  if(res.error) { err.textContent = res.error; return; }
+  currentUser = res.user;
+  localStorage.setItem('voltixToken', res.token);
+  try {
+    const oRes = await apiGet('/api/orders');
+    if (!oRes.error) orders = oRes;
+  } catch(e) {}
   saveState();
   err.textContent = "";
   closeAuthFn();
   refreshAuthUI();
-  showToast(`Welcome back, ${user.name.split(' ')[0]}!`);
+  showToast(`Welcome back, ${currentUser.name.split(' ')[0]}!`);
 });
 
 // Seller Dashboard
@@ -874,7 +885,7 @@ document.getElementById('aiGenBtn').addEventListener('click', async ()=>{
   btn.disabled = true;
   try {
     const prompt = `You are an AI for an engineering DIY marketplace. Generate product details for "${name}". Return ONLY JSON, no markdown: {"price": <number 50-15000>, "cat": "<one of: Robotics, IoT, Microcontrollers, Sensors, Modules, Kits>", "icon": "<emoji>", "project_idea": "<1 sentence project idea>"}`;
-    const res = await apiPost('/api/grok', {prompt});
+    const res = await apiPost('/api/voltix-ai', {prompt});
     if(res.result){
       let cleaned = res.result.replace(/```json/g, '').replace(/```/g, '').trim();
       const data = JSON.parse(cleaned);
@@ -900,7 +911,7 @@ function renderMyProducts(){
   const mine = products.filter(p=>p.owner===currentUser.email);
   tbody.innerHTML = mine.length === 0 
     ? `<tr><td colspan="4" style="text-align:center;color:var(--muted);padding:20px;">No products uploaded yet.</td></tr>`
-    : mine.map(p=>`<tr><td><img src="${p.image}" style="width:24px;height:24px;vertical-align:middle;object-fit:cover;border-radius:4px;margin-right:8px;"> ${p.name}</td><td class="mono">₹${p.price.toLocaleString('en-IN')}</td><td class="mono">${p.stock}</td><td><button class="del-btn" onclick="deleteProduct(${p.id})">Remove</button></td></tr>`).join('');
+    : mine.map(p=>`<tr><td>${p.name}</td><td class="mono">₹${p.price.toLocaleString('en-IN')}</td><td class="mono">${p.stock}</td><td><button class="del-btn" onclick="deleteProduct(${p.id})">Remove</button></td></tr>`).join('');
 
   const soList = document.getElementById('sellerOrdersList');
   if(!soList) return;
@@ -930,9 +941,7 @@ document.getElementById('checkoutBtn').addEventListener('click', ()=>{
   if(!currentUser){ closeCartFn(); openAuth(); showToast("Sign in to place your order"); return; }
   const total = cart.reduce((s,c)=>{ const p=products.find(pr=>pr.id===c.id); return s + p.price*c.qty; },0);
   document.getElementById('payAmount').textContent = "₹" + total.toLocaleString('en-IN');
-  const upiId = "sakthivelk1576@okicici";
-  const upiUrl = `upi://pay?pa=${upiId}&pn=Voltix&am=${total}&cu=INR`;
-  document.getElementById('upiQrImg').src = `https://api.qrserver.com/v1/create-qr-code/?size=150x150&data=${encodeURIComponent(upiUrl)}`;
+  document.getElementById('upiQrImg').src = `https://api.qrserver.com/v1/create-qr-code/?size=150x150&data=upi://pay?pa=demo@upi&pn=Voltix&am=${total}&cu=INR`;
   document.getElementById('paymentModal').classList.add('open');
 });
 document.getElementById('cancelPayBtn').addEventListener('click', ()=>{ document.getElementById('paymentModal').classList.remove('open'); });
@@ -946,20 +955,16 @@ document.getElementById('confirmPayBtn').addEventListener('click', async ()=>{
   const address = document.getElementById('deliveryAddress').value.trim();
   if (!address) {
     showToast("Please enter your delivery address!");
-    document.getElementById('deliveryAddress').focus();
     return;
   }
-  
   document.getElementById('paymentModal').classList.remove('open');
   const total = cart.reduce((s,c)=>{ const p=products.find(pr=>pr.id===c.id); return s + p.price*c.qty; },0);
-  const order = { id: "VLX-" + Math.floor(100000 + Math.random()*899999), items: [...cart], total, stage: 0, userEmail: currentUser.email, address: address };
-  await apiPost('/api/orders', order);
-  cart.forEach(c=>{ const p = products.find(pr=>pr.id===c.id); p.stock = Math.max(0, p.stock - c.qty); });
-  orders.push(order);
-  saveState();
+  const order = { items: [...cart], total, address };
+  const res = await apiPost('/api/orders', order);
+  orders.push(res);
   cart = [];
-  updateCartUI(); renderProducts(); closeCartFn(); refreshAuthUI(); renderMyOrders();
-  startTracker(order);
+  updateCartUI(); renderProducts(); closeCartFn(); renderMyOrders();
+  startTracker(res);
   showToast("Payment successful! Order placed.");
 });
 
@@ -1013,19 +1018,9 @@ function renderDeliveryOrders(){
     <div class="card" style="padding:14px;display:flex;flex-direction:row;align-items:flex-start;justify-content:space-between;margin-bottom:10px;">
       <div><div class="order-id">${o.id}</div>
         <div style="font-size:0.8rem;margin-top:4px;">User: ${o.userEmail}</div>
-        <div style="font-size:0.75rem;color:var(--text);margin-top:2px;padding:4px;background:rgba(255,255,255,0.05);border-radius:4px;">📍 ${o.address || 'No address provided'}</div>
-        <div style="margin-top:8px;font-size:0.8rem;color:var(--text);">
-          ${o.items.map(i => {
-            const prod = products.find(p=>p.id===i.id);
-            if(!prod) return '';
-            return `<div>${i.qty}x ${prod.name} 
-              <a href="${prod.source_url || '#'}" target="_blank" style="color:var(--volt);text-decoration:none;margin-left:8px;font-size:0.75rem;">📦 Buy from Supplier</a>
-            </div>`;
-          }).join('')}
-        </div>
+        <div style="font-size:0.75rem;color:var(--text);margin-top:2px;padding:4px;background:rgba(255,255,255,0.05);border-radius:4px;">📍 ${o.address}</div>
         <div style="color:var(--circuit);font-size:0.85rem;font-weight:600;margin-top:8px;">${stages[o.stage]}</div></div>
       <div style="display:flex;flex-direction:column;gap:8px;">
-        ${o.stage >= 1 && o.stage < stages.length-1 ? `<button class="btn-ghost" style="padding:6px 10px;font-size:0.75rem;border-color:var(--volt);color:var(--volt);" onclick="window.open('https://rapido.bike/parcel','_blank')">🚚 Rapido</button>` : ''}
         ${o.stage < stages.length-1 ? `<button class="btn-primary" style="padding:6px 10px;font-size:0.75rem;" onclick="advanceDeliveryOrder('${o.id}')">Advance</button>` : `<span style="color:var(--muted);font-size:0.8rem;">Delivered</span>`}
       </div>
     </div>`).join('');
@@ -1035,38 +1030,10 @@ window.advanceDeliveryOrder = async function(id){
   if(order && order.stage < stages.length-1){
     await apiPost('/api/orders/advance', {id});
     order.stage++;
-    saveState(); renderDeliveryOrders(); renderMyOrders();
+    renderDeliveryOrders(); renderMyOrders();
     showToast(`Order ${id} advanced to ${stages[order.stage]}`);
   }
 }
-
-// Product Details
-let currentProductViewId = null;
-window.openProductDetails = function(id){
-  const p = products.find(x=>x.id===id);
-  if(!p) return;
-  currentProductViewId = id;
-  document.getElementById('pdIcon').innerHTML = `<img src="${p.image}" style="width:100%;height:100%;object-fit:contain;">`;
-  document.getElementById('pdIcon').style.padding = "0";
-  document.getElementById('pdIcon').style.overflow = "hidden";
-  document.getElementById('pdIcon').style.background = "#fff";
-  document.getElementById('pdCat').textContent = p.category;
-  document.getElementById('pdName').textContent = p.name;
-  document.getElementById('pdPrice').textContent = "₹" + p.price.toLocaleString('en-IN');
-  document.getElementById('pdDesc').textContent = p.description || 'High-quality electronic component sourced for Voltix & CO.';
-  
-  const sourceLink = document.getElementById('pdSourceLink');
-  if (p.source_url) {
-    sourceLink.href = p.source_url;
-    sourceLink.textContent = p.source || 'Original Supplier';
-    sourceLink.parentElement.style.display = 'flex';
-  } else {
-    sourceLink.parentElement.style.display = 'none';
-  }
-  document.getElementById('prodDetailsModal').classList.add('open');
-};
-document.getElementById('closePdBtn').addEventListener('click', ()=>{ document.getElementById('prodDetailsModal').classList.remove('open'); });
-document.getElementById('pdAddBtn').addEventListener('click', ()=>{ if(currentProductViewId) addToCart(currentProductViewId); });
 
 // DBMS
 document.getElementById('dbmsBtn').addEventListener('click', ()=>{ document.getElementById('dbmsModal').classList.add('open'); renderDbTable('users'); });
@@ -1082,32 +1049,14 @@ async function renderDbTable(table){
   const wrap = document.getElementById('dbContent');
   wrap.innerHTML = '<div style="text-align:center;color:var(--muted);padding:20px;">Loading...</div>';
   try {
-    const data = await fetch(BASE_URL + '/api/' + table).then(r=>r.json());
+    const data = await apiGet('/api/' + table);
+    if(data.error) { wrap.innerHTML = `<div class="empty-note">${data.error}</div>`; return; }
     if(!data || !data.length){ wrap.innerHTML = '<div class="empty-note">Table is empty.</div>'; return; }
     
     if (table === 'orders') {
       wrap.innerHTML = `
         <div style="display:flex; flex-direction:column; gap:16px; width:100%;">
-          ${data.map(o => {
-            const itemsHtml = o.items.map(item => {
-              const p = products.find(pr => pr.id === item.id);
-              if (!p) return `<div style="font-size:0.85rem;color:var(--muted);">Product ID #${item.id} (Deleted) x ${item.qty}</div>`;
-              return `
-                <div style="display:flex; justify-content:space-between; align-items:center; background:rgba(255,255,255,0.02); padding:8px 12px; border-radius:8px; border:1px solid rgba(255,255,255,0.05); margin-bottom:6px;">
-                  <div>
-                    <strong style="color:var(--text);">${p.name}</strong> 
-                    <span style="color:var(--muted); font-size:0.85rem; margin-left:8px;">Qty: ${item.qty}</span>
-                  </div>
-                  <div>
-                    <a href="${p.source_url || '#'}" target="_blank" style="color:var(--volt); font-size:0.85rem; text-decoration:underline; font-weight:600;">
-                      Order from ${p.source || 'Supplier'}
-                    </a>
-                  </div>
-                </div>
-              `;
-            }).join('');
-            
-            return `
+          ${data.map(o => `
               <div style="background:var(--surface-2); padding:16px; border-radius:12px; border:1px solid var(--border); display:flex; flex-direction:column; gap:10px;">
                 <div style="display:flex; justify-content:space-between; align-items:center; border-bottom:1px solid var(--border); padding-bottom:8px;">
                   <strong style="color:var(--volt); font-size:1.1rem;">${o.id}</strong>
