@@ -154,11 +154,8 @@ def init_db():
                     stage INTEGER
                  )''')
     
-    # Purge any old AI-generated or Robu images from the database
-    db.execute('DELETE FROM products WHERE source=%s', ('Robocraze',))
-    
     # Seed products if empty (important for Render ephemeral disk)
-    cur = db.execute("SELECT COUNT(*) FROM products")
+    cur = db.execute("SELECT COUNT(*) FROM products WHERE source=%s", ("Robocraze",))
     if cur.fetchone()[0] == 0:
         # Format: (Name, Category, Supplier_Base_Price, Stock, Source, Source_URL, Description, Image)
         initial_data = [

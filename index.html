@@ -699,6 +699,7 @@ function updateCartUI(){
   } else {
     body.innerHTML = cart.map(c=>{
       const p = products.find(pr=>pr.id===c.id);
+      if(!p) return '';
       const originalPrice = Math.round((p.price - 49) / 1.20);
       return `
       <div class="cart-item">
@@ -719,14 +720,14 @@ function updateCartUI(){
       </div>`;
     }).join('');
   }
-  const total = cart.reduce((s,c)=>{ const p=products.find(pr=>pr.id===c.id); return s + p.price*c.qty; },0);
+  const total = cart.reduce((s,c)=>{ const p=products.find(pr=>pr.id===c.id); return s + (p ? p.price*c.qty : 0); },0);
   document.getElementById('cartTotal').textContent = "₹" + total.toLocaleString('en-IN');
 }
 function openCart(){ document.getElementById('cartDrawer').classList.add('open'); document.getElementById('overlay').classList.add('open'); }
 function closeCartFn(){ document.getElementById('cartDrawer').classList.remove('open'); document.getElementById('overlay').classList.remove('open'); }
 
 function openCheckout(){
-  const total = cart.reduce((s,c)=>{ const p=products.find(pr=>pr.id===c.id); return s + p.price*c.qty; },0);
+  const total = cart.reduce((s,c)=>{ const p=products.find(pr=>pr.id===c.id); return s + (p ? p.price*c.qty : 0); },0);
   document.getElementById('checkoutTotalAmt').textContent = "₹" + total.toLocaleString('en-IN');
   document.getElementById('pincodeInput').value = '';
   document.getElementById('checkoutModal').classList.add('open');
