@@ -58,25 +58,41 @@ def index():
 
 DATABASE_URL = os.environ.get("DATABASE_URL", "postgresql://neondb_owner:npg_F2oZNEdIl4ik@ep-billowing-sea-atb0yt4v.c-9.us-east-1.aws.neon.tech/neondb?sslmode=require")
 
+class CursorProxy:
+    def __init__(self, cur):
+        self._cur = cur
+        self.lastrowid = None
+        
+    def __getattr__(self, name):
+        return getattr(self._cur, name)
+        
+    def __iter__(self):
+        return iter(self._cur)
+
 class DBWrapper:
     def __init__(self, conn):
         self.conn = conn
+        
     def execute(self, sql, args=()):
         sql = sql.replace('?', '%s')
-        cur = self.conn.cursor()
+        real_cur = self.conn.cursor()
+        proxy = CursorProxy(real_cur)
+        
         if sql.strip().upper().startswith('INSERT') and 'RETURNING' not in sql.upper() and ' INTO ' in sql.upper():
             try:
-                cur.execute(sql + ' RETURNING id', args)
-                res = cur.fetchone()
-                cur.lastrowid = res['id'] if res else None
+                real_cur.execute(sql + ' RETURNING id', args)
+                res = real_cur.fetchone()
+                proxy.lastrowid = res['id'] if res else None
             except Exception as e:
                 self.conn.rollback()
-                cur.execute(sql, args)
-                cur.lastrowid = None
+                real_cur.execute(sql, args)
+                proxy.lastrowid = None
         else:
-            cur.execute(sql, args)
-            cur.lastrowid = None
-        return cur
+            real_cur.execute(sql, args)
+            proxy.lastrowid = None
+            
+        return proxy
+        
     def commit(self):
         self.conn.commit()
 
