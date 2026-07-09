@@ -314,25 +314,26 @@ def grok_ai():
     
     try:
         html = urllib.request.urlopen(req).read().decode('utf-8')
-        prod_block = re.search(r'<div class="product-layout.*?</div></div></div>', html, re.DOTALL)
-        if not prod_block:
-            return jsonify({"result": json.dumps({"found": False, "reason": "Not available."})})
+        
+        idx = html.find('product-layout')
+        if idx == -1:
+            return jsonify({"result": json.dumps({"found": False, "reason": "No products found for this search."})})
             
-        pb = prod_block.group(0)
+        pb = html[idx:idx+2000]
         img_match = re.search(r'<img src="(.*?)"', pb)
         link_match = re.search(r'<div class="image"><a href="(.*?)"', pb)
         title_match = re.search(r'<h4><a href=".*?">(.*?)</a></h4>', pb)
         
-        # ElectronicsComp has two price formats depending on discount
-        price_match = re.search(r'<span class="price-new"><i class="fa fa-inr"></i> (.*?)</span>', pb)
-        if not price_match:
-            price_match = re.search(r'<p class="price">\s*<i class="fa fa-inr"></i> (.*?)\s*</p>', pb)
+        price_match = re.search(r'<span class="price-new">(.*?)</span>', pb) or re.search(r'<p class="price">(.*?)</p>', pb, re.DOTALL)
             
         if not title_match or not price_match:
             return jsonify({"result": json.dumps({"found": False, "reason": "Parse error."})})
             
         title = title_match.group(1).strip()
-        base_price = float(price_match.group(1).replace(',', ''))
+        p_str = price_match.group(1).replace('Rs.','').replace('<i class="fa fa-inr"></i>','').replace(',','').strip()
+        p_str = p_str.split('<')[0].strip()
+        base_price = float(p_str)
+        
         img_url = img_match.group(1) if img_match else "https://placehold.co/80x80"
         source_url = link_match.group(1) if link_match else url
         
