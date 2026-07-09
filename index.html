@@ -1064,7 +1064,7 @@ async function renderDbTable(table){
   const wrap = document.getElementById('dbContent');
   wrap.innerHTML = '<div style="text-align:center;color:var(--muted);padding:20px;">Loading...</div>';
   try {
-    const data = await fetch('/api/' + table).then(r=>r.json());
+    const data = await fetch(BASE_URL + '/api/' + table).then(r=>r.json());
     if(!data || !data.length){ wrap.innerHTML = '<div class="empty-note">Table is empty.</div>'; return; }
     
     if (table === 'orders') {
